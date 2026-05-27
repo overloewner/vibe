@@ -75,6 +75,35 @@ def add_heading(doc, text, level=1):
     return p
 
 
+def add_subheading(doc, text):
+    """Добавляет подзаголовок (жирный курсив, TNR 14pt, красная строка)."""
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    pf = p.paragraph_format
+    pf.space_before = Pt(6)
+    pf.space_after = Pt(2)
+    pf.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+    pf.first_line_indent = Cm(1.25)
+    run = p.add_run(text)
+    _apply_tnr_font(run, size=14, bold=True, italic=True)
+    return p
+
+
+def add_bullet(doc, text):
+    """Добавляет маркированный пункт списка (TNR 14pt, отступ 1.25 см)."""
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    pf = p.paragraph_format
+    pf.space_before = Pt(0)
+    pf.space_after = Pt(0)
+    pf.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+    pf.first_line_indent = Cm(0)
+    pf.left_indent = Cm(1.25)
+    run = p.add_run("• " + text)
+    _apply_tnr_font(run, size=14)
+    return p
+
+
 def add_code_block(doc, code_text, caption=None):
     """Добавляет блок кода: Courier New 10pt, светло-серый фон, рамка."""
     if caption:
@@ -278,6 +307,61 @@ def create_title_page(doc, lab_num, lab_title,
 #  ЛР3 — TDD (Stack unittest)
 # ═══════════════════════════════════════════════════════════════════════════
 
+LAB3_STACK_CODE = '''class Stack:
+    """Реализация структуры данных «стек» (LIFO)."""
+
+    def __init__(self):
+        self._items = []
+
+    def push(self, item) -> None:
+        self._items.append(item)
+
+    def pop(self):
+        if self.is_empty():
+            raise IndexError("Стек пуст — операция pop невозможна")
+        return self._items.pop()
+
+    def peek(self):
+        if self.is_empty():
+            raise IndexError("Стек пуст — операция peek невозможна")
+        return self._items[-1]
+
+    def is_empty(self) -> bool:
+        return len(self._items) == 0
+
+    def size(self) -> int:
+        return len(self._items)
+
+    def clear(self) -> None:
+        self._items = []'''
+
+LAB3_SETUP_CODE = '''class TestStack(unittest.TestCase):
+
+    def setUp(self):
+        self.stack = Stack()
+
+    def tearDown(self):
+        self.stack.clear()'''
+
+LAB3_RUN_CODE = '''def run_tests():
+    loader = unittest.TestLoader()
+    suite  = unittest.TestSuite()
+    suite.addTests(loader.loadTestsFromTestCase(TestStack))
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+
+    print("=" * 60)
+    print("ИТОГИ ТЕСТИРОВАНИЯ")
+    print("=" * 60)
+    print(f"  Всего тестов : {result.testsRun}")
+    print(f"  Успешно      : {result.testsRun - len(result.failures) - len(result.errors)}")
+    print(f"  Провалов     : {len(result.failures)}")
+    print(f"  Ошибок       : {len(result.errors)}")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    run_tests()'''
+
 LAB3_CODE = '''import unittest
 
 
@@ -375,8 +459,24 @@ class TestStack(unittest.TestCase):
         self.assertAlmostEqual(self.stack.pop(), 3.14)
 
 
+def run_tests():
+    loader = unittest.TestLoader()
+    suite  = unittest.TestSuite()
+    suite.addTests(loader.loadTestsFromTestCase(TestStack))
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+
+    print("=" * 60)
+    print("ИТОГИ ТЕСТИРОВАНИЯ")
+    print("=" * 60)
+    print(f"  Всего тестов : {result.testsRun}")
+    print(f"  Успешно      : {result.testsRun - len(result.failures) - len(result.errors)}")
+    print(f"  Провалов     : {len(result.failures)}")
+    print(f"  Ошибок       : {len(result.errors)}")
+    print("=" * 60)
+
 if __name__ == "__main__":
-    unittest.main(verbosity=2)'''
+    run_tests()'''
 
 LAB3_OUTPUT = '''test_clear_empties_the_stack (__main__.TestStack.test_clear_empties_the_stack)
 Метод clear должен полностью опустошить стек. ... ok
@@ -420,26 +520,35 @@ def generate_lab3(output_path):
     create_title_page(doc, "3", "Разработка через тестирование (TDD)")
     add_page_break(doc)
 
-    # 1. Цель
+    # Цель
     _inline_bold_para(doc,
-        "1. Цель работы: ",
+        "Цель работы: ",
         "изучить принципы модульного тестирования программ на языке Python "
         "с использованием встроенного модуля unittest, а также разработать "
         "набор тестов, проверяющих корректность реализации программы на различных "
         "входных данных, граничные случаи и обработку исключительных ситуаций."
     )
 
-    # 2. Постановка задачи
+    # Постановка задачи
     _inline_bold_para(doc,
-        "2. Постановка задачи: ",
+        "Постановка задачи: ",
         "разработать набор модульных тестов для реализации структуры данных «Стек» (Stack). "
         "Стек реализует принцип LIFO (Last In — First Out): последний добавленный элемент "
-        "извлекается первым. Тесты должны проверить основные операции (push, pop, peek, "
-        "is_empty, size, clear), обработку граничных случаев и корректную генерацию исключений."
+        "извлекается первым. В рамках лабораторной работы необходимо разработать тесты, "
+        "проверяющие следующее:"
     )
+    task_items = [
+        "корректность работы основных операций на различных входных данных (push, pop, peek, size);",
+        "поведение метода is_empty на новом стеке и после добавления/удаления элементов;",
+        "граничные случаи: pop и peek на пустом стеке должны генерировать IndexError;",
+        "корректность полной очистки стека методом clear();",
+        "устойчивость стека к элементам разных типов (int, str, float, list).",
+    ]
+    for item in task_items:
+        add_bullet(doc, item)
 
-    # 3. Описание тестируемого функционала
-    add_heading(doc, "3. Описание тестируемого функционала")
+    # Описание тестируемого функционала
+    add_heading(doc, "Описание тестируемого функционала")
     add_paragraph(doc,
         "Тестируемый модуль реализует класс Stack — структуру данных «стек» с принципом LIFO. "
         "Класс хранит элементы в списке _items и предоставляет следующие методы:"
@@ -465,18 +574,94 @@ def generate_lab3(output_path):
         r2 = p.add_run(d)
         _apply_tnr_font(r2, size=14)
 
-    # 4. Разработка модульных тестов
-    add_heading(doc, "4. Разработка модульных тестов")
+    # Исходная программа
+    add_heading(doc, "Исходная программа")
+    add_paragraph(doc,
+        "Класс Stack реализован в виде отдельного модуля. Внутреннее хранилище — "
+        "список Python (_items). При попытке вызвать pop() или peek() на пустом стеке "
+        "генерируется исключение IndexError, что является ожидаемым поведением и "
+        "используется в тестах. Код класса представлен ниже:"
+    )
+    add_code_block(doc, LAB3_STACK_CODE)
+    add_figure_caption(doc, "Рис. 1. Исходный код класса Stack")
+
+    # Разработка модульных тестов
+    add_heading(doc, "Разработка модульных тестов")
     add_paragraph(doc,
         "Для написания тестов используется стандартный модуль Python unittest. "
+        "Данный модуль входит в состав стандартной библиотеки и не требует "
+        "установки дополнительных пакетов. Он предоставляет базовый класс TestCase, "
+        "множество assert-методов для проверки условий и механизм автоматического "
+        "обнаружения и запуска тестов."
+    )
+    add_paragraph(doc,
         "Все тесты организованы в класс TestStack, наследующийся от unittest.TestCase. "
-        "Метод setUp() создаёт новый экземпляр Stack перед каждым тестом, обеспечивая "
-        "изоляцию. Метод tearDown() вызывает clear() после каждого теста, возвращая "
-        "стек в начальное состояние."
+        "Это обеспечивает доступ ко всем встроенным методам проверки и автоматический "
+        "запуск тестовых методов (чьи имена начинаются с test_)."
     )
 
-    # 5. Таблица 1 — методы тестирования
-    add_heading(doc, "5. Основные методы тестирования")
+    # setUp
+    add_subheading(doc, "Метод setUp()")
+    add_paragraph(doc,
+        "Метод setUp() выполняется автоматически перед запуском каждого тестового метода. "
+        "Он инициализирует новый экземпляр Stack, обеспечивая изоляцию тестов: каждый тест "
+        "начинает работу с чистым пустым стеком и не зависит от результатов других тестов. "
+        "Метод tearDown() вызывается после каждого теста и вызывает clear(), возвращая стек "
+        "в исходное состояние."
+    )
+    add_code_block(doc, LAB3_SETUP_CODE)
+    add_figure_caption(doc, "Рис. 2. Методы setUp() и tearDown() тестового класса")
+
+    # Описание тестов
+    add_subheading(doc, "Описание реализованных тестов")
+    add_paragraph(doc,
+        "Всего реализовано 10 тестовых методов, покрывающих весь публичный интерфейс класса Stack."
+    )
+
+    tests_desc = [
+        ("test_push_single_element",
+         "Проверяет, что после добавления одного элемента стек перестаёт быть пустым "
+         "(assertFalse(is_empty())) и его размер становится равным 1 (assertEqual(size(), 1))."),
+        ("test_push_multiple_elements",
+         "Последовательно добавляет 4 элемента (10, 20, 30, 40) и проверяет, что "
+         "метод size() возвращает значение 4."),
+        ("test_pop_returns_last_pushed",
+         "Помещает в стек три строки и проверяет принцип LIFO: метод pop() должен "
+         "вернуть последний добавленный элемент «третий»."),
+        ("test_pop_empty_stack_raises_index_error",
+         "Проверяет, что вызов pop() на пустом стеке генерирует исключение IndexError. "
+         "Используется конструкция with self.assertRaises(IndexError)."),
+        ("test_peek_returns_top_without_removing",
+         "Добавляет 100 и 200, затем вызывает peek(). Проверяет, что peek() возвращает "
+         "200 (вершину стека) и при этом размер стека остаётся равным 2 — элемент не удалён."),
+        ("test_peek_empty_stack_raises_index_error",
+         "Проверяет, что peek() на пустом стеке генерирует IndexError, аналогично pop()."),
+        ("test_is_empty_on_new_stack",
+         "Проверяет, что только что созданный стек является пустым: assertTrue(is_empty())."),
+        ("test_is_empty_after_push_and_pop",
+         "Добавляет два элемента, затем дважды вызывает pop(), и проверяет, "
+         "что стек снова стал пустым."),
+        ("test_clear_empties_the_stack",
+         "Добавляет 5 элементов, вызывает clear() и проверяет, что стек пустой "
+         "и его размер равен 0."),
+        ("test_push_mixed_types",
+         "Добавляет элементы разных типов (int, str, float, list) и проверяет корректность "
+         "хранения и порядка извлечения. Для float используется assertAlmostEqual."),
+    ]
+
+    for name, desc in tests_desc:
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.first_line_indent = Cm(1.25)
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+        r1 = p.add_run(f"{name}. ")
+        _apply_tnr_font(r1, size=14, bold=True)
+        r2 = p.add_run(desc)
+        _apply_tnr_font(r2, size=14)
+
+    # Таблица 1 — методы тестирования
+    add_heading(doc, "Таблица тестовых сценариев")
+    add_paragraph(doc, "Для наглядности все реализованные тесты сведены в таблицу:")
     t1_headers = ["№", "Метод теста", "Проверяемое свойство", "Assert-метод"]
     t1_rows = [
         ["1", "test_push_single_element", "Добавление одного элемента, стек не пустой", "assertFalse, assertEqual"],
@@ -490,44 +675,82 @@ def generate_lab3(output_path):
         ["9", "test_clear_empties_the_stack", "clear полностью опустошает стек", "assertTrue, assertEqual"],
         ["10", "test_push_mixed_types", "Стек хранит элементы разных типов", "assertEqual, assertAlmostEqual"],
     ]
-    add_table(doc, t1_headers, t1_rows, caption="Таблица 1. Методы тестирования класса Stack")
+    add_table(doc, t1_headers, t1_rows, caption="Таблица 1. Тестовые сценарии класса Stack")
 
-    # 6. Таблица 2 — assert-методы
-    add_heading(doc, "6. Описание assert-методов")
+    # Таблица 2 — assert-методы
+    add_heading(doc, "Основные assert-методы unittest")
+    add_paragraph(doc,
+        "В ходе тестирования используются следующие методы проверки модуля unittest:"
+    )
     t2_headers = ["Метод", "Назначение", "Пример использования"]
     t2_rows = [
-        ["assertEqual(a, b)", "Проверка равенства", "self.assertEqual(stack.size(), 1)"],
-        ["assertTrue(x)", "Проверка истинности", "self.assertTrue(stack.is_empty())"],
-        ["assertFalse(x)", "Проверка ложности", "self.assertFalse(stack.is_empty())"],
-        ["assertRaises(exc)", "Проверка исключения", "with self.assertRaises(IndexError): stack.pop()"],
-        ["assertAlmostEqual(a, b)", "Проверка приблизительного равенства float", "self.assertAlmostEqual(stack.pop(), 3.14)"],
+        ["assertEqual(a, b)", "Проверка равенства двух значений", "self.assertEqual(stack.size(), 1)"],
+        ["assertTrue(x)", "Проверка истинности логического выражения", "self.assertTrue(stack.is_empty())"],
+        ["assertFalse(x)", "Проверка ложности логического выражения", "self.assertFalse(stack.is_empty())"],
+        ["assertRaises(exc)", "Проверка генерации ожидаемого исключения", "with self.assertRaises(IndexError): stack.pop()"],
+        ["assertAlmostEqual(a, b)", "Проверка приблизительного равенства чисел с плавающей точкой", "self.assertAlmostEqual(stack.pop(), 3.14)"],
     ]
     add_table(doc, t2_headers, t2_rows, caption="Таблица 2. Assert-методы unittest")
 
-    # 7. Код тестов
-    add_heading(doc, "7. Код программы")
+    # Функция запуска тестов
+    add_heading(doc, "Функция запуска тестов")
     add_paragraph(doc,
-        "Полный код модуля с реализацией класса Stack и набором модульных тестов:"
+        "Для запуска набора тестов реализована функция run_tests(), которая:"
     )
-    add_code_block(doc, LAB3_CODE)
-    add_figure_caption(doc, "Рис. 1. Реализация класса Stack и модульных тестов (main.py)")
+    run_items = [
+        "создаёт загрузчик тестов unittest.TestLoader();",
+        "формирует тестовый набор unittest.TestSuite() и добавляет тесты из класса TestStack;",
+        "запускает тесты через unittest.TextTestRunner(verbosity=2);",
+        "после завершения выводит сводную статистику: общее число тестов, количество успешных, "
+        "число ошибок и провалов.",
+    ]
+    for item in run_items:
+        add_bullet(doc, item)
+    add_code_block(doc, LAB3_RUN_CODE)
+    add_figure_caption(doc, "Рис. 3. Функция запуска тестов run_tests()")
 
-    # 8. Демонстрация работы
-    add_heading(doc, "8. Демонстрация работы программы")
+    # Демонстрация работы
+    add_heading(doc, "Демонстрация работы программы")
     add_paragraph(doc,
-        "Тесты запущены командой python main.py с использованием "
-        "unittest.TextTestRunner(verbosity=2). Консольный вывод:"
+        "После написания тестов они были запущены командой python main.py. "
+        "Все тесты выполнены в среде интерпретатора Python 3 без ошибок импорта."
     )
     add_code_block(doc, LAB3_OUTPUT)
-    add_figure_caption(doc, "Рис. 2. Консольный вывод: 10 тестов пройдены успешно")
+    add_figure_caption(doc, "Рис. 4. Консольный вывод результатов запуска тестов")
+
+    add_paragraph(doc,
+        "Тест test_push_single_element проверил добавление одного элемента. "
+        "Стек перестал быть пустым, размер стал равным 1. Тест пройден успешно."
+    )
+    add_paragraph(doc,
+        "Тест test_pop_returns_last_pushed подтвердил принцип LIFO: после добавления "
+        "трёх строк метод pop() корректно вернул последнюю добавленную («третий»)."
+    )
+    add_paragraph(doc,
+        "Тесты test_pop_empty_stack_raises_index_error и test_peek_empty_stack_raises_index_error "
+        "подтвердили, что методы pop() и peek() корректно генерируют IndexError при "
+        "вызове на пустом стеке."
+    )
+    add_paragraph(doc,
+        "Тест test_push_mixed_types проверил хранение элементов разных типов (int, str, float, list). "
+        "Порядок извлечения соответствует LIFO, для значения 3.14 применён assertAlmostEqual."
+    )
     add_paragraph(doc,
         "Все 10 тестов завершились со статусом «ok». Итоговая строка "
         "«Ran 10 tests in 0.001s / OK» подтверждает, что ни один тест "
         "не завершился ошибкой или провалом."
     )
 
-    # 9. Вывод
-    add_heading(doc, "9. Вывод")
+    # Код программы
+    add_heading(doc, "Код программы")
+    add_paragraph(doc,
+        "Полный код модуля с реализацией класса Stack и набором модульных тестов:"
+    )
+    add_code_block(doc, LAB3_CODE)
+    add_figure_caption(doc, "Рис. 5. Полный исходный код программы (main.py)")
+
+    # Вывод
+    add_heading(doc, "Вывод")
     add_paragraph(doc,
         "В ходе выполнения лабораторной работы были изучены и применены на практике "
         "принципы модульного тестирования на языке Python с использованием встроенной "
