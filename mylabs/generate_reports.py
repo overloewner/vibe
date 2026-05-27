@@ -1256,6 +1256,46 @@ LAB5_OUTPUT = '''[OK] Таблицы созданы: authors, author_profiles, b
 [ЗАВЕРШЕНО] Все операции выполнены успешно.'''
 
 
+LAB5_DDL_CODE = '''CREATE TABLE authors (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name  VARCHAR(100) NOT NULL,
+    birth_year INTEGER
+);
+
+CREATE TABLE author_profiles (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    author_id  INTEGER NOT NULL UNIQUE
+               REFERENCES authors(id) ON DELETE CASCADE,
+    nationality VARCHAR(60),
+    biography  TEXT
+);
+
+CREATE TABLE books (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    title     VARCHAR(200) NOT NULL,
+    year      INTEGER,
+    pages     INTEGER,
+    genre     VARCHAR(60),
+    author_id INTEGER NOT NULL
+              REFERENCES authors(id) ON DELETE CASCADE
+);
+
+CREATE TABLE readers (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name  VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE,
+    phone VARCHAR(20)
+);
+
+CREATE TABLE borrowings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    reader_id   INTEGER NOT NULL REFERENCES readers(id),
+    book_id     INTEGER NOT NULL REFERENCES books(id),
+    borrow_date DATE NOT NULL,
+    return_date DATE
+);'''
+
+
 def generate_lab5(output_path):
     doc = Document()
     set_page_margins(doc)
@@ -1264,23 +1304,39 @@ def generate_lab5(output_path):
 
     # Цель
     _inline_bold_para(doc,
-        "1. Цель работы: ",
+        "Цель работы: ",
         "изучение взаимодействия с реляционными базами данных с использованием "
         "языка Python на примере библиотеки SQLAlchemy ORM. В ходе работы необходимо "
         "освоить объектно-реляционное отображение (ORM), создать модели данных с "
         "различными типами связей (1:1, 1:N, N:M), выполнить наполнение базы "
         "тестовыми данными и реализовать CRUD-операции с управлением транзакциями."
     )
-    _inline_bold_para(doc,
-        "2. Задачи: ",
-        "спроектировать схему данных для предметной области «Библиотека»; "
+    add_paragraph(doc,
+        "Задачи: спроектировать схему данных для предметной области «Библиотека»; "
         "реализовать модели через SQLAlchemy ORM; выполнить CRUD-операции; "
         "реализовать фильтрацию записей; продемонстрировать управление "
         "транзакциями (commit/rollback)."
     )
 
+    # Введение
+    add_heading(doc, "Введение")
+    add_paragraph(doc,
+        "Системы управления базами данных (СУБД) используются для хранения и "
+        "обработки структурированной информации. В курсе рассматриваются реляционные "
+        "SQL-СУБД (SQLite, PostgreSQL, MySQL) и нереляционные (MongoDB). Реляционные "
+        "базы данных используют строгую схему с таблицами, строками и столбцами, "
+        "что удобно для систем с чётко определённой структурой данных."
+    )
+    add_paragraph(doc,
+        "Проектирование базы данных включает организацию связей между сущностями "
+        "(один к одному, один ко многим, многие ко многим), которые реализуются "
+        "через внешние ключи. Для работы с базами данных на Python применяются "
+        "как низкоуровневые драйверы, так и ORM-библиотеки, такие как SQLAlchemy, "
+        "позволяющие работать с данными как с объектами, без написания SQL вручную."
+    )
+
     # 1. Теоретическая часть
-    add_heading(doc, "1. Теоретическая часть")
+    add_heading(doc, "Теоретическая часть")
     add_paragraph(doc,
         "ORM (Object-Relational Mapping) — технология отображения объектов "
         "языка программирования на строки реляционных таблиц. При использовании "
@@ -1291,30 +1347,47 @@ def generate_lab5(output_path):
     add_paragraph(doc,
         "SQLAlchemy — наиболее популярная ORM-библиотека для Python. Версия 2.x "
         "использует декларативный стиль описания моделей (DeclarativeBase). "
-        "Ключевые компоненты: Engine (подключение), Session (единица работы с БД), "
-        "relationship() (описание связей). Стратегии загрузки:"
+        "Ключевые компоненты SQLAlchemy:"
     )
-    strategies = [
-        ("joinedload", "выполняет один SQL JOIN-запрос; эффективно для связей 1:1;"),
-        ("selectinload", "выполняет отдельный IN-запрос; эффективно для связей 1:N и N:M;"),
-        ("lazy (по умолчанию)", "загружает связанные объекты при первом обращении."),
+    t_comp_headers = ["Компонент", "Назначение"]
+    t_comp_rows = [
+        ["Engine", "Управление подключением к базе данных"],
+        ["Base (DeclarativeBase)", "Базовый класс для декларативных моделей"],
+        ["Session", "Единица работы с БД (unit of work pattern)"],
+        ["relationship()", "Описание связей между моделями"],
+        ["joinedload", "Загрузка связанных объектов через JOIN (эффективно для 1:1)"],
+        ["selectinload", "Загрузка связанных объектов через IN-запрос (для 1:N, N:M)"],
     ]
-    for s, d in strategies:
+    add_table(doc, t_comp_headers, t_comp_rows, caption="Таблица 1. Ключевые компоненты SQLAlchemy")
+
+    # 2. Предметная область
+    add_heading(doc, "Предметная область: Библиотека")
+    add_paragraph(doc,
+        "Предметная область «Библиотека» позволяет продемонстрировать все требуемые "
+        "типы связей между сущностями. Разработана схема базы данных с 5 таблицами:"
+    )
+    tables_desc = [
+        ("authors (авторы)", "содержит информацию об авторах: id, name, birth_year;"),
+        ("author_profiles (профили авторов)", "связь 1:1 с authors — id, author_id (уникальный FK), "
+         "nationality, biography;"),
+        ("books (книги)", "связь N:1 с authors — id, title, year, pages, genre, author_id;"),
+        ("readers (читатели)", "id, name, email (уникальный), phone;"),
+        ("borrowings (выдачи)", "ассоциативная таблица N:M — id, reader_id (FK), book_id (FK), "
+         "borrow_date, return_date."),
+    ]
+    for name, desc in tables_desc:
         p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         p.paragraph_format.first_line_indent = Cm(0)
         p.paragraph_format.left_indent = Cm(1.25)
         p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-        r1 = p.add_run(f"{s} — ")
+        r1 = p.add_run(f"{name} — ")
         _apply_tnr_font(r1, size=14, bold=True)
-        r2 = p.add_run(d)
+        r2 = p.add_run(desc)
         _apply_tnr_font(r2, size=14)
 
-    # 2. Предметная область
-    add_heading(doc, "2. Предметная область: Библиотека")
     add_paragraph(doc,
-        "Предметная область «Библиотека» позволяет продемонстрировать все требуемые "
-        "типы связей между сущностями:"
+        "Типы связей в схеме:"
     )
     relations = [
         ("1:1 — Author ↔ AuthorProfile",
@@ -1323,8 +1396,7 @@ def generate_lab5(output_path):
          "Один автор может написать несколько книг."),
         ("N:M — Reader ↔ Book",
          "Один читатель может взять несколько книг; одна книга — у разных читателей. "
-         "Связь реализована через ассоциативную таблицу borrowings с дополнительными "
-         "атрибутами (borrow_date, return_date)."),
+         "Связь реализована через ассоциативную таблицу borrowings."),
     ]
     for rel, desc in relations:
         p = doc.add_paragraph()
@@ -1337,13 +1409,22 @@ def generate_lab5(output_path):
         r2 = p.add_run(desc)
         _apply_tnr_font(r2, size=14)
 
+    # DDL
+    add_subheading(doc, "Создание таблиц (SQL DDL)")
+    add_paragraph(doc,
+        "Структура базы данных описывается следующими SQL-командами (эквивалент, "
+        "генерируемый SQLAlchemy через Base.metadata.create_all(engine)):"
+    )
+    add_code_block(doc, LAB5_DDL_CODE)
+    add_figure_caption(doc, "Рис. 1. SQL DDL — создание таблиц базы данных")
+
     # 3. Реализация моделей
-    add_heading(doc, "3. Реализация моделей SQLAlchemy")
+    add_heading(doc, "Реализация моделей SQLAlchemy")
     add_paragraph(doc,
         "Описание всех моделей и связей в декларативном стиле SQLAlchemy 2.x:"
     )
     add_code_block(doc, LAB5_CODE_MODELS)
-    add_figure_caption(doc, "Рис. 1. Описание моделей SQLAlchemy ORM (фрагмент main.py)")
+    add_figure_caption(doc, "Рис. 2. Описание моделей SQLAlchemy ORM (main.py)")
     add_paragraph(doc,
         "Параметр uselist=False в relationship для AuthorProfile обеспечивает связь 1:1: "
         "атрибут author.profile возвращает один объект, а не список. "
@@ -1352,20 +1433,45 @@ def generate_lab5(output_path):
     )
 
     # 4. CRUD
-    add_heading(doc, "4. CRUD-операции и управление транзакциями")
+    add_heading(doc, "CRUD-операции и управление транзакциями")
     add_paragraph(doc,
         "Реализованы все четыре типа операций с базой данных:"
     )
+    t_crud_headers = ["Операция", "Метод SQLAlchemy", "Назначение"]
+    t_crud_rows = [
+        ["Create (Создание)", "session.add() / session.add_all()", "Добавление новых записей"],
+        ["Read (Чтение)", "session.query().filter() / .options()", "Получение и фильтрация данных"],
+        ["Update (Обновление)", "изменение атрибута + session.commit()", "Изменение существующих записей"],
+        ["Delete (Удаление)", "session.delete() + session.commit()", "Удаление записей"],
+        ["Rollback (Откат)", "session.rollback()", "Отмена транзакции при ошибке"],
+    ]
+    add_table(doc, t_crud_headers, t_crud_rows, caption="Таблица 2. CRUD-операции в SQLAlchemy")
+
     add_code_block(doc, LAB5_CODE_CRUD)
-    add_figure_caption(doc, "Рис. 2. CRUD-операции и управление транзакциями (фрагмент main.py)")
+    add_figure_caption(doc, "Рис. 3. CRUD-операции и управление транзакциями (main.py)")
+
+    # Управление транзакциями
+    add_subheading(doc, "Управление транзакциями")
+    add_paragraph(doc,
+        "Транзакция — последовательность операций с БД, выполняемая как единое целое. "
+        "Обеспечивает свойства ACID (Atomicity, Consistency, Isolation, Durability). "
+        "В SQLAlchemy транзакция управляется через сессию:"
+    )
+    t_trans_headers = ["Метод", "Действие"]
+    t_trans_rows = [
+        ["session.commit()", "Фиксация всех изменений в базе данных"],
+        ["session.rollback()", "Откат транзакции, отмена всех незафиксированных изменений"],
+        ["with Session(engine) as s:", "Автоматическое закрытие сессии после блока (context manager)"],
+    ]
+    add_table(doc, t_trans_headers, t_trans_rows, caption="Таблица 3. Методы управления транзакциями")
 
     # 5. Вывод программы
-    add_heading(doc, "5. Демонстрация работы программы")
+    add_heading(doc, "Демонстрация работы программы")
     add_paragraph(doc,
         "Консольный вывод при запуске python main.py:"
     )
     add_code_block(doc, LAB5_OUTPUT)
-    add_figure_caption(doc, "Рис. 3. Консольный вывод программы")
+    add_figure_caption(doc, "Рис. 4. Консольный вывод программы")
     add_paragraph(doc,
         "Результаты демонстрируют корректную работу всех связей: "
         "у каждого автора отображается профиль (1:1), список книг (1:N), "
@@ -1375,7 +1481,7 @@ def generate_lab5(output_path):
     )
 
     # 6. Вывод
-    add_heading(doc, "6. Вывод")
+    add_heading(doc, "Вывод")
     add_paragraph(doc,
         "В ходе выполнения лабораторной работы была достигнута поставленная цель — "
         "изучение взаимодействия с реляционными базами данных на языке Python с "
