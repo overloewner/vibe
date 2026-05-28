@@ -2983,6 +2983,681 @@ def generate_lab8(output_path):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  ЛР9 — Tkinter GUI
+# ═══════════════════════════════════════════════════════════════════════════
+
+LAB9_INIT_CODE = '''root = tk.Tk()
+root.title("Книжный магазин — Каталог")
+root.geometry("1000x580")
+root.resizable(False, False)
+
+BG         = "#f0f4f8"
+ACCENT     = "#4a90d9"
+BTN_FG     = "white"
+FONT_MAIN  = ("Arial", 11)
+FONT_BOLD  = ("Arial", 12, "bold")
+FONT_TITLE = ("Arial", 14, "bold")
+
+root.configure(bg=BG)
+root.columnconfigure(0, weight=3)
+root.columnconfigure(1, weight=1)
+root.rowconfigure(0, weight=1)'''
+
+LAB9_PANELS_CODE = '''# Левая панель — поиск и отображение результатов
+left = tk.Frame(root, bg=BG)
+left.grid(row=0, column=0, sticky="nsew", padx=15, pady=15)
+
+tk.Label(left, text="Книжный магазин — Каталог книг",
+         font=FONT_TITLE, bg=BG, fg=ACCENT).pack(pady=(0, 8))
+
+# Правая панель — форма добавления книги
+right = tk.Frame(root, bg=BG, relief="groove", bd=1)
+right.grid(row=0, column=1, sticky="nsew", padx=(0, 15), pady=15)
+
+tk.Label(right, text="Добавить книгу",
+         font=FONT_BOLD, bg=BG, fg=ACCENT).pack(pady=(10, 5))'''
+
+LAB9_SEARCH_ROW_CODE = '''# Строка поиска с кнопками
+sf = tk.Frame(left, bg=BG)
+sf.pack(fill="x")
+tk.Label(sf, text="Поиск:", font=FONT_BOLD, bg=BG).pack(side="left")
+search_entry = tk.Entry(sf, font=FONT_MAIN, width=30)
+search_entry.pack(side="left", padx=6)
+search_entry.bind("<Return>", lambda e: search_books())
+tk.Button(sf, text="Найти", command=search_books,
+          bg=ACCENT, fg=BTN_FG, font=FONT_MAIN,
+          relief="flat", padx=10).pack(side="left", padx=3)
+tk.Button(sf, text="✖ Очистить", command=clear_search,
+          bg="#e57373", fg=BTN_FG, font=FONT_MAIN,
+          relief="flat", padx=6).pack(side="left", padx=3)
+
+# Радиокнопки режима поиска
+mf = tk.Frame(left, bg=BG)
+mf.pack(fill="x", pady=5)
+search_mode = tk.StringVar(value="title")
+tk.Label(mf, text="Искать по:", font=FONT_MAIN, bg=BG).pack(side="left")
+for val, lbl in [("title","Названию"),("author","Автору"),("genre","Жанру")]:
+    tk.Radiobutton(mf, text=lbl, variable=search_mode, value=val,
+                   bg=BG, font=FONT_MAIN).pack(side="left", padx=8)
+
+tk.Button(left, text="Показать все книги", command=show_all,
+          bg="#66bb6a", fg=BTN_FG, font=FONT_MAIN,
+          relief="flat", padx=8).pack(pady=(0, 6))'''
+
+LAB9_LISTBOX_CODE = '''# Список результатов с вертикальным скроллом
+lf = tk.Frame(left, bg=BG)
+lf.pack(fill="both", expand=True)
+sb = tk.Scrollbar(lf)
+sb.pack(side="right", fill="y")
+result_list = tk.Listbox(lf, font=FONT_MAIN, yscrollcommand=sb.set,
+                          height=16, selectbackground=ACCENT,
+                          activestyle="none")
+result_list.pack(fill="both", expand=True)
+sb.config(command=result_list.yview)
+
+status_label = tk.Label(left,
+    text=f"Всего книг в каталоге: {len(books)}",
+    font=("Arial", 10, "italic"), bg=BG, fg="#555")
+status_label.pack(pady=(4, 0))'''
+
+LAB9_SEARCH_CODE = '''def search_books():
+    """Поиск книг по выбранному критерию."""
+    query = search_entry.get().strip().lower()
+    mode  = search_mode.get()
+    result_list.delete(0, tk.END)
+
+    if not query:
+        messagebox.showwarning("Внимание", "Введите поисковый запрос.")
+        return
+
+    found = []
+    for b in books:
+        if mode == "title"  and query in b["title"].lower():
+            found.append(b)
+        elif mode == "author" and query in b["author"].lower():
+            found.append(b)
+        elif mode == "genre"  and query in b["genre"].lower():
+            found.append(b)
+
+    if not found:
+        result_list.insert(tk.END, "— Книги по запросу не найдены —")
+    else:
+        for b in found:
+            result_list.insert(tk.END,
+                f"{b['title']}  |  {b['author']}  |  "
+                f"{b['genre']}  |  {b['year']} г.  |  {b['price']:.0f} руб.")
+    status_label.config(text=f"Найдено: {len(found)} книг(и)")'''
+
+LAB9_ADD_CODE = '''def add_book():
+    """Добавление книги с валидацией всех полей."""
+    title   = title_entry.get().strip()
+    author  = author_entry.get().strip()
+    genre   = genre_var.get().strip()
+    year_s  = year_entry.get().strip()
+    price_s = price_entry.get().strip()
+
+    # Проверка обязательных строковых полей
+    if not title or not author or not genre:
+        messagebox.showerror("Ошибка",
+            "Заполните все обязательные поля:\nНазвание, Автор, Жанр.")
+        return
+
+    # Валидация года
+    try:
+        year = int(year_s)
+        if year < 1000 or year > 2100:
+            raise ValueError
+    except ValueError:
+        messagebox.showerror("Ошибка",
+            "Год издания: целое число в диапазоне 1000–2100.")
+        return
+
+    # Валидация цены
+    try:
+        price = float(price_s)
+        if price <= 0:
+            raise ValueError
+    except ValueError:
+        messagebox.showerror("Ошибка",
+            "Цена должна быть положительным числом.")
+        return
+
+    books.append({"title": title, "author": author,
+                  "genre": genre, "year": year, "price": price})
+    messagebox.showinfo("Успешно", f"Книга «{title}» добавлена в каталог.")
+    for w in (title_entry, author_entry, year_entry, price_entry):
+        w.delete(0, tk.END)
+    genre_combo["values"] = sorted(set(b["genre"] for b in books))
+    refresh_info()
+    status_label.config(text=f"Всего книг в каталоге: {len(books)}")'''
+
+LAB9_HELPERS_CODE = '''def refresh_info():
+    """Обновление справочного блока жанров."""
+    info_text.config(state="normal")
+    info_text.delete("1.0", tk.END)
+    genre_counts = {}
+    for b in books:
+        genre_counts[b["genre"]] = genre_counts.get(b["genre"], 0) + 1
+    for g, cnt in sorted(genre_counts.items()):
+        info_text.insert(tk.END, f"• {g}: {cnt} кн.\n")
+    info_text.config(state="disabled")
+
+def show_all():
+    """Вывод полного каталога в список результатов."""
+    result_list.delete(0, tk.END)
+    for b in books:
+        result_list.insert(tk.END,
+            f"{b['title']}  |  {b['author']}  |  "
+            f"{b['genre']}  |  {b['year']} г.  |  {b['price']:.0f} руб.")
+    status_label.config(text=f"Всего книг в каталоге: {len(books)}")
+
+def clear_search():
+    """Очистка поля поиска и списка результатов."""
+    search_entry.delete(0, tk.END)
+    result_list.delete(0, tk.END)
+    status_label.config(text=f"Всего книг в каталоге: {len(books)}")'''
+
+LAB9_FULL_CODE = '''import tkinter as tk
+from tkinter import messagebox, ttk
+
+books = [
+    {"title": "Мастер и Маргарита",      "author": "Булгаков М.А.",    "genre": "Роман",          "year": 1967, "price": 450.0},
+    {"title": "Преступление и наказание", "author": "Достоевский Ф.М.", "genre": "Роман",          "year": 1866, "price": 380.0},
+    {"title": "Война и мир",              "author": "Толстой Л.Н.",     "genre": "Роман-эпопея",   "year": 1869, "price": 620.0},
+    {"title": "Евгений Онегин",           "author": "Пушкин А.С.",      "genre": "Роман в стихах", "year": 1833, "price": 290.0},
+    {"title": "Тихий Дон",               "author": "Шолохов М.А.",     "genre": "Роман-эпопея",   "year": 1940, "price": 510.0},
+    {"title": "Отцы и дети",             "author": "Тургенев И.С.",    "genre": "Роман",          "year": 1862, "price": 320.0},
+    {"title": "Обломов",                  "author": "Гончаров И.А.",    "genre": "Роман",          "year": 1859, "price": 355.0},
+    {"title": "Собачье сердце",           "author": "Булгаков М.А.",    "genre": "Повесть",        "year": 1925, "price": 275.0},
+    {"title": "Капитанская дочка",        "author": "Пушкин А.С.",      "genre": "Роман",          "year": 1836, "price": 310.0},
+    {"title": "Анна Каренина",            "author": "Толстой Л.Н.",     "genre": "Роман",          "year": 1878, "price": 490.0},
+]
+GENRES = sorted(set(b["genre"] for b in books))
+
+def search_books():
+    query = search_entry.get().strip().lower()
+    mode  = search_mode.get()
+    result_list.delete(0, tk.END)
+    if not query:
+        messagebox.showwarning("Внимание", "Введите поисковый запрос.")
+        return
+    found = []
+    for b in books:
+        if mode == "title"  and query in b["title"].lower():  found.append(b)
+        elif mode == "author" and query in b["author"].lower(): found.append(b)
+        elif mode == "genre"  and query in b["genre"].lower():  found.append(b)
+    if not found:
+        result_list.insert(tk.END, "— Книги по запросу не найдены —")
+    else:
+        for b in found:
+            result_list.insert(tk.END,
+                f"{b[\'title\']}  |  {b[\'author\']}  |  {b[\'genre\']}  |  {b[\'year\']} г.  |  {b[\'price\']:.0f} руб.")
+    status_label.config(text=f"Найдено: {len(found)} книг(и)")
+
+def show_all():
+    result_list.delete(0, tk.END)
+    for b in books:
+        result_list.insert(tk.END,
+            f"{b[\'title\']}  |  {b[\'author\']}  |  {b[\'genre\']}  |  {b[\'year\']} г.  |  {b[\'price\']:.0f} руб.")
+    status_label.config(text=f"Всего книг в каталоге: {len(books)}")
+
+def clear_search():
+    search_entry.delete(0, tk.END)
+    result_list.delete(0, tk.END)
+    status_label.config(text=f"Всего книг в каталоге: {len(books)}")
+
+def add_book():
+    title, author, genre = title_entry.get().strip(), author_entry.get().strip(), genre_var.get().strip()
+    year_s, price_s = year_entry.get().strip(), price_entry.get().strip()
+    if not title or not author or not genre:
+        messagebox.showerror("Ошибка", "Заполните все обязательные поля."); return
+    try:
+        year = int(year_s)
+        if year < 1000 or year > 2100: raise ValueError
+    except ValueError:
+        messagebox.showerror("Ошибка", "Год: целое число 1000–2100."); return
+    try:
+        price = float(price_s)
+        if price <= 0: raise ValueError
+    except ValueError:
+        messagebox.showerror("Ошибка", "Цена — положительное число."); return
+    books.append({"title": title, "author": author, "genre": genre, "year": year, "price": price})
+    messagebox.showinfo("Успешно", f"Книга «{title}» добавлена в каталог.")
+    for w in (title_entry, author_entry, year_entry, price_entry): w.delete(0, tk.END)
+    genre_combo["values"] = sorted(set(b["genre"] for b in books))
+    refresh_info()
+    status_label.config(text=f"Всего книг в каталоге: {len(books)}")
+
+def refresh_info():
+    info_text.config(state="normal"); info_text.delete("1.0", tk.END)
+    genre_counts = {}
+    for b in books: genre_counts[b["genre"]] = genre_counts.get(b["genre"], 0) + 1
+    for g, cnt in sorted(genre_counts.items()): info_text.insert(tk.END, f"• {g}: {cnt} кн.\\n")
+    info_text.config(state="disabled")
+
+root = tk.Tk()
+root.title("Книжный магазин — Каталог")
+root.geometry("1000x580")
+root.resizable(False, False)
+BG, ACCENT, BTN_FG = "#f0f4f8", "#4a90d9", "white"
+FONT_MAIN, FONT_BOLD, FONT_TITLE = ("Arial",11), ("Arial",12,"bold"), ("Arial",14,"bold")
+root.configure(bg=BG)
+root.columnconfigure(0, weight=3); root.columnconfigure(1, weight=1); root.rowconfigure(0, weight=1)
+
+left = tk.Frame(root, bg=BG)
+left.grid(row=0, column=0, sticky="nsew", padx=15, pady=15)
+tk.Label(left, text="Книжный магазин — Каталог книг", font=FONT_TITLE, bg=BG, fg=ACCENT).pack(pady=(0,8))
+sf = tk.Frame(left, bg=BG); sf.pack(fill="x")
+tk.Label(sf, text="Поиск:", font=FONT_BOLD, bg=BG).pack(side="left")
+search_entry = tk.Entry(sf, font=FONT_MAIN, width=30); search_entry.pack(side="left", padx=6)
+search_entry.bind("<Return>", lambda e: search_books())
+tk.Button(sf, text="Найти", command=search_books, bg=ACCENT, fg=BTN_FG, font=FONT_MAIN, relief="flat", padx=10).pack(side="left", padx=3)
+tk.Button(sf, text="✖ Очистить", command=clear_search, bg="#e57373", fg=BTN_FG, font=FONT_MAIN, relief="flat", padx=6).pack(side="left", padx=3)
+mf = tk.Frame(left, bg=BG); mf.pack(fill="x", pady=5)
+search_mode = tk.StringVar(value="title")
+tk.Label(mf, text="Искать по:", font=FONT_MAIN, bg=BG).pack(side="left")
+for val, lbl in [("title","Названию"),("author","Автору"),("genre","Жанру")]:
+    tk.Radiobutton(mf, text=lbl, variable=search_mode, value=val, bg=BG, font=FONT_MAIN).pack(side="left", padx=8)
+tk.Button(left, text="Показать все книги", command=show_all, bg="#66bb6a", fg=BTN_FG, font=FONT_MAIN, relief="flat", padx=8).pack(pady=(0,6))
+lf = tk.Frame(left, bg=BG); lf.pack(fill="both", expand=True)
+sb = tk.Scrollbar(lf); sb.pack(side="right", fill="y")
+result_list = tk.Listbox(lf, font=FONT_MAIN, yscrollcommand=sb.set, height=16, selectbackground=ACCENT, activestyle="none")
+result_list.pack(fill="both", expand=True); sb.config(command=result_list.yview)
+status_label = tk.Label(left, text=f"Всего книг в каталоге: {len(books)}", font=("Arial",10,"italic"), bg=BG, fg="#555")
+status_label.pack(pady=(4,0))
+
+right = tk.Frame(root, bg=BG, relief="groove", bd=1)
+right.grid(row=0, column=1, sticky="nsew", padx=(0,15), pady=15)
+tk.Label(right, text="Добавить книгу", font=FONT_BOLD, bg=BG, fg=ACCENT).pack(pady=(10,5))
+for label_txt, var_name in [("Название *","title_entry"),("Автор *","author_entry"),("Год *","year_entry"),("Цена (руб.) *","price_entry")]:
+    tk.Label(right, text=label_txt, font=FONT_MAIN, bg=BG, anchor="w").pack(fill="x", padx=12, pady=(3,0))
+    e = tk.Entry(right, font=FONT_MAIN); e.pack(fill="x", padx=12, pady=(0,3)); globals()[var_name] = e
+tk.Label(right, text="Жанр *", font=FONT_MAIN, bg=BG, anchor="w").pack(fill="x", padx=12, pady=(3,0))
+genre_var = tk.StringVar(value=GENRES[0] if GENRES else "")
+genre_combo = ttk.Combobox(right, textvariable=genre_var, values=GENRES, font=FONT_MAIN, state="normal")
+genre_combo.pack(fill="x", padx=12, pady=(0,8))
+tk.Button(right, text="Добавить в каталог", command=add_book, bg=ACCENT, fg=BTN_FG, font=FONT_BOLD, relief="flat", pady=5).pack(fill="x", padx=12, pady=4)
+tk.Label(right, text="─"*28, bg=BG, fg="#ccc").pack(pady=4)
+tk.Label(right, text="Жанры в каталоге:", font=FONT_BOLD, bg=BG).pack(padx=12, anchor="w")
+info_text = tk.Text(right, font=("Arial",10), height=8, wrap="word", bg="#e8f0fe", relief="flat", state="normal")
+info_text.pack(fill="x", padx=12, pady=5)
+refresh_info()
+
+show_all()
+root.mainloop()'''
+
+
+def generate_lab9(output_path):
+    doc = Document()
+    set_page_margins(doc)
+    create_title_page(doc, "9", "Создание GUI-приложения")
+    add_page_break(doc)
+
+    # Цель работы
+    _inline_bold_para(doc,
+        "Цель работы: ",
+        "изучить принципы разработки приложений с графическим пользовательским "
+        "интерфейсом (GUI) на языке Python с использованием стандартной библиотеки "
+        "Tkinter путём создания полнофункционального приложения для управления "
+        "каталогом книжного магазина."
+    )
+    tasks = [
+        "изучить принципы событийно-ориентированного программирования и работы главного цикла обработки событий;",
+        "освоить основные виджеты Tkinter: Label, Entry, Button, Radiobutton, Listbox, Combobox, Text, Scrollbar;",
+        "изучить менеджеры геометрии pack() и grid() для размещения элементов в окне;",
+        "разработать двухпанельное приложение для управления каталогом книжного магазина;",
+        "реализовать функцию поиска книг по трём критериям: названию, автору и жанру;",
+        "реализовать форму добавления новой книги с полной валидацией вводимых данных;",
+        "провести тестирование разработанного приложения и проверить обработку ошибочного ввода.",
+    ]
+    for t in tasks:
+        p = doc.add_paragraph(style="List Bullet")
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+        run = p.add_run(t)
+        _apply_tnr_font(run, size=14)
+
+    # Теоретические сведения
+    add_heading(doc, "Теоретические сведения")
+    add_paragraph(doc,
+        "Графический пользовательский интерфейс (GUI) — это способ взаимодействия "
+        "пользователя с программой через визуальные элементы управления: окна, кнопки, "
+        "поля ввода и списки. В отличие от консольных приложений, GUI-программы "
+        "работают по принципу событийно-ориентированного программирования: программа "
+        "не выполняется последовательно, а ожидает действий пользователя "
+        "(нажатий клавиш, кликов мышью) и реагирует на них через функции-обработчики."
+    )
+
+    add_subheading(doc, "Библиотека Tkinter")
+    add_paragraph(doc,
+        "Tkinter — стандартная библиотека Python для создания GUI-приложений, "
+        "входящая в стандартный дистрибутив без необходимости дополнительной установки. "
+        "Она является обёрткой над библиотекой Tk, написанной на языке Tcl. "
+        "Приложение Tkinter строится путём создания корневого окна (tk.Tk()), "
+        "добавления в него виджетов, привязки функций-обработчиков к событиям "
+        "и запуска главного цикла root.mainloop(). "
+        "Метод mainloop() блокирует выполнение программы и постоянно опрашивает "
+        "очередь событий, передавая каждое событие соответствующему обработчику."
+    )
+
+    add_subheading(doc, "Виджеты Tkinter")
+    add_paragraph(doc,
+        "Виджеты — это отдельные элементы управления графического интерфейса. "
+        "В данной работе используются следующие стандартные виджеты:"
+    )
+    widgets = [
+        "Label — метка для отображения текста (заголовки, подписи, статус);",
+        "Entry — однострочное поле ввода текста (поиск, форма добавления);",
+        "Button — кнопка, выполняющая команду при нажатии;",
+        "Radiobutton — переключатель: позволяет выбрать один из нескольких вариантов;",
+        "Listbox — список с возможностью прокрутки и выбора элементов;",
+        "Scrollbar — полоса прокрутки, связанная с Listbox или Text;",
+        "Text — многострочное текстовое поле (справочная информация);",
+        "ttk.Combobox — выпадающий список из расширенного модуля ttk.",
+    ]
+    for w in widgets:
+        p = doc.add_paragraph(style="List Bullet")
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+        run = p.add_run(w)
+        _apply_tnr_font(run, size=14)
+
+    add_subheading(doc, "Менеджеры геометрии")
+    add_paragraph(doc,
+        "Размещение виджетов в окне осуществляется тремя менеджерами геометрии. "
+        "Метод pack() автоматически располагает виджеты по вертикали или горизонтали "
+        "в порядке добавления, поддерживая параметры side (left/right/top/bottom), "
+        "fill (x/y/both) и expand. "
+        "Метод grid() делит контейнер на строки и столбцы и позволяет размещать "
+        "виджеты в конкретную ячейку таблицы, что удобно для форм ввода. "
+        "Метод place() задаёт точные координаты в пикселях. "
+        "В данной работе используются оба метода: grid() для основного разделения "
+        "на панели и pack() для размещения элементов внутри каждой панели."
+    )
+
+    add_subheading(doc, "Обработка событий и переменные Tkinter")
+    add_paragraph(doc,
+        "Привязка обработчиков к действиям пользователя выполняется двумя способами: "
+        "через параметр command виджета Button/Radiobutton — функция вызывается при "
+        "нажатии, и через метод bind() — для обработки клавиатурных событий "
+        "(например, search_entry.bind('<Return>', lambda e: search_books()) "
+        "позволяет запускать поиск по нажатию Enter). "
+        "Переменные Tkinter (StringVar) связывают состояние виджета со значением "
+        "переменной: при изменении переменной виджет обновляется автоматически."
+    )
+
+    # Постановка задачи
+    add_heading(doc, "Постановка задачи")
+    add_paragraph(doc,
+        "В качестве предметной области выбран книжный магазин. "
+        "Начальный каталог содержит 10 книг русской классической литературы "
+        "с атрибутами: название, автор, жанр, год издания и цена. "
+        "Пользователь должен иметь возможность просматривать каталог, "
+        "выполнять поиск и добавлять новые книги."
+    )
+    add_paragraph(doc,
+        "Приложение должно реализовывать следующий функционал:"
+    )
+    funcs = [
+        "отображение полного каталога книг при запуске (функция show_all);",
+        "поиск книг по одному из трёх критериев — названию, автору или жанру (функция search_books);",
+        "очистка результатов поиска и сброс поля ввода (функция clear_search);",
+        "добавление новой книги с валидацией: проверка непустых полей, корректного "
+        "года (1000–2100) и положительной цены (функция add_book);",
+        "динамическое обновление справочного блока жанров после добавления книги "
+        "(функция refresh_info);",
+        "вывод строки статуса с количеством найденных или всего книг.",
+    ]
+    for f in funcs:
+        p = doc.add_paragraph(style="List Bullet")
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+        run = p.add_run(f)
+        _apply_tnr_font(run, size=14)
+
+    # Проектирование приложения
+    add_heading(doc, "Проектирование приложения")
+    add_paragraph(doc,
+        "Главное окно приложения имеет фиксированный размер 1000×580 пикселей "
+        "и разделено на две функциональные панели с помощью менеджера grid() "
+        "с весами столбцов 3:1. Цветовая схема оформлена в сине-серой гамме: "
+        "фон BG=#f0f4f8, акцентный цвет ACCENT=#4a90d9. "
+        "Заголовок окна — «Книжный магазин — Каталог»."
+    )
+    add_paragraph(doc,
+        "Левая панель (left, вес 3) — основная рабочая зона — содержит:"
+    )
+    left_items = [
+        "заголовок «Книжный магазин — Каталог книг» (Label, акцентный цвет);",
+        "строку поиска: поле Entry с привязкой <Return>, кнопки «Найти» и «✖ Очистить»;",
+        "три радиокнопки (Radiobutton) для выбора режима поиска: по названию, автору или жанру;",
+        "кнопку «Показать все книги» для вывода полного каталога;",
+        "Listbox со связанным Scrollbar для отображения результатов (высота 16 строк);",
+        "строку статуса (Label) с количеством найденных / всего книг.",
+    ]
+    for item in left_items:
+        p = doc.add_paragraph(style="List Bullet")
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+        run = p.add_run(item)
+        _apply_tnr_font(run, size=14)
+    add_paragraph(doc,
+        "Правая панель (right, вес 1) — форма добавления книги — содержит:"
+    )
+    right_items = [
+        "четыре поля Entry: Название, Автор, Год, Цена (все обязательные, отмечены «*»);",
+        "выпадающий список Combobox для выбора жанра (с возможностью ввода нового);",
+        "кнопку «Добавить в каталог» (цвет ACCENT);",
+        "справочный блок Text (высота 8 строк, только чтение) со списком жанров и их количеством.",
+    ]
+    for item in right_items:
+        p = doc.add_paragraph(style="List Bullet")
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+        run = p.add_run(item)
+        _apply_tnr_font(run, size=14)
+
+    # Реализация
+    add_heading(doc, "Реализация")
+    add_paragraph(doc,
+        "Программная реализация выполнена на языке Python 3 с использованием "
+        "стандартной библиотеки Tkinter. Весь код размещён в одном файле main.py "
+        "и организован в следующем порядке: данные каталога, функции-обработчики, "
+        "построение интерфейса, запуск главного цикла."
+    )
+
+    add_subheading(doc, "Инициализация главного окна и цветовая схема")
+    add_paragraph(doc,
+        "Корневое окно создаётся вызовом tk.Tk(). Размер задаётся строкой "
+        "\"1000x580\", изменение размера заблокировано (resizable=False). "
+        "Константы цветов и шрифтов вынесены в переменные BG, ACCENT, FONT_MAIN "
+        "для единообразия оформления. Весовые коэффициенты столбцов задаются "
+        "columnconfigure() для обеспечения корректного масштабирования панелей:"
+    )
+    add_code_block(doc, LAB9_INIT_CODE)
+    add_figure_caption(doc, "Рис. 1. Инициализация главного окна и цветовой схемы")
+
+    add_subheading(doc, "Разбивка на панели")
+    add_paragraph(doc,
+        "Интерфейс делится на две независимые области с помощью контейнеров Frame, "
+        "размещённых через grid() в столбцах 0 и 1. Параметр sticky=\"nsew\" "
+        "растягивает панель на всё доступное пространство ячейки. "
+        "Правая панель оформлена с рамкой (relief=\"groove\") для визуального "
+        "отделения от основной рабочей области:"
+    )
+    add_code_block(doc, LAB9_PANELS_CODE)
+    add_figure_caption(doc, "Рис. 2. Создание двух панелей через grid()")
+
+    add_subheading(doc, "Строка поиска и радиокнопки режима")
+    add_paragraph(doc,
+        "Строка поиска состоит из метки Label, поля Entry и двух кнопок, "
+        "упакованных горизонтально через pack(side=\"left\"). "
+        "Привязка <Return> позволяет запускать поиск нажатием Enter без нажатия кнопки. "
+        "Переменная search_mode (StringVar) хранит текущий режим поиска; "
+        "три радиокнопки переключают её значение между \"title\", \"author\", \"genre\":"
+    )
+    add_code_block(doc, LAB9_SEARCH_ROW_CODE)
+    add_figure_caption(doc, "Рис. 3. Строка поиска и радиокнопки режима")
+
+    add_subheading(doc, "Список результатов (Listbox + Scrollbar)")
+    add_paragraph(doc,
+        "Для отображения найденных книг используется виджет Listbox. "
+        "Чтобы обеспечить прокрутку длинных списков, к нему привязан Scrollbar: "
+        "параметр yscrollcommand=sb.set передаёт позицию прокрутки в Scrollbar, "
+        "а sb.config(command=result_list.yview) позволяет Scrollbar управлять "
+        "прокруткой Listbox. Строка статуса обновляется после каждой операции:"
+    )
+    add_code_block(doc, LAB9_LISTBOX_CODE)
+    add_figure_caption(doc, "Рис. 4. Listbox со Scrollbar и строка статуса")
+
+    add_subheading(doc, "Функция поиска книг")
+    add_paragraph(doc,
+        "Функция search_books() считывает строку запроса из поля Entry "
+        "и текущий режим из переменной search_mode. Перед поиском список "
+        "очищается (delete(0, END)). Если поле пустое — выводится предупреждение "
+        "через messagebox.showwarning(). "
+        "Поиск регистронезависим (оба значения приводятся к нижнему регистру). "
+        "Каждая найденная книга форматируется в строку и добавляется в Listbox:"
+    )
+    add_code_block(doc, LAB9_SEARCH_CODE)
+    add_figure_caption(doc, "Рис. 5. Функция search_books() — поиск по каталогу")
+
+    add_subheading(doc, "Функция добавления книги с валидацией")
+    add_paragraph(doc,
+        "Функция add_book() выполняет трёхуровневую валидацию: сначала проверяет "
+        "непустоту обязательных строковых полей (название, автор, жанр), "
+        "затем корректность года (должен быть целым числом в диапазоне 1000–2100), "
+        "потом положительность цены. При любой ошибке выводится модальное "
+        "диалоговое окно messagebox.showerror() с пояснением. "
+        "При успехе книга добавляется в список, поля очищаются, "
+        "Combobox и справочный блок обновляются:"
+    )
+    add_code_block(doc, LAB9_ADD_CODE)
+    add_figure_caption(doc, "Рис. 6. Функция add_book() с полной валидацией")
+
+    add_subheading(doc, "Вспомогательные функции")
+    add_paragraph(doc,
+        "refresh_info() перестраивает справочный блок Text: сначала переводит "
+        "его в режим редактирования (state=\"normal\"), очищает содержимое, "
+        "подсчитывает количество книг каждого жанра и выводит список, "
+        "после чего блокирует поле (state=\"disabled\"). "
+        "show_all() и clear_search() используют аналогичный подход к "
+        "управлению Listbox через delete(0, END) и insert(END, ...):"
+    )
+    add_code_block(doc, LAB9_HELPERS_CODE)
+    add_figure_caption(doc, "Рис. 7. Вспомогательные функции refresh_info, show_all, clear_search")
+
+    # Тестирование
+    add_heading(doc, "Тестирование")
+    add_paragraph(doc,
+        "Тестирование приложения проводилось вручную путём последовательной "
+        "проверки всех реализованных функций. Для каждого тестового сценария "
+        "фиксировались входные данные, ожидаемый результат и фактический результат."
+    )
+
+    add_subheading(doc, "Запуск и отображение каталога")
+    add_paragraph(doc,
+        "При запуске приложения автоматически вызывается функция show_all(), "
+        "которая заполняет Listbox всеми 10 книгами каталога. "
+        "В правой панели отображается справочный блок с жанрами. "
+        "В строке статуса показывается «Всего книг в каталоге: 10»."
+    )
+    add_figure_caption(doc, "Рис. 8. Главное окно приложения при запуске (полный каталог)")
+
+    add_subheading(doc, "Поиск по названию и автору")
+    add_paragraph(doc,
+        "Проверен поиск по частичному совпадению. При вводе «мастер» с режимом "
+        "«По названию» найдена 1 книга: «Мастер и Маргарита». "
+        "При переключении на «По автору» и вводе «булгаков» найдены 2 книги: "
+        "«Мастер и Маргарита» и «Собачье сердце». "
+        "Строка статуса обновлена: «Найдено: 2 книг(и)»."
+    )
+    add_figure_caption(doc, "Рис. 9. Результат поиска по автору «булгаков»")
+
+    add_subheading(doc, "Поиск по жанру и отображение всех книг")
+    add_paragraph(doc,
+        "Поиск по жанру «роман-эпопея» вернул 2 книги: «Война и мир» и «Тихий Дон». "
+        "Нажатие кнопки «Показать все книги» сбросило фильтр и вывело "
+        "полный каталог из 10 записей. Кнопка «✖ Очистить» очистила "
+        "поле поиска и список результатов."
+    )
+    add_figure_caption(doc, "Рис. 10. Поиск по жанру и отображение полного каталога")
+
+    add_subheading(doc, "Добавление новой книги")
+    add_paragraph(doc,
+        "Заполнена форма добавления: Название — «Идиот», Автор — «Достоевский Ф.М.», "
+        "Жанр — «Роман», Год — 1869, Цена — 340. "
+        "После нажатия «Добавить в каталог» появилось диалоговое окно "
+        "с подтверждением «Книга «Идиот» добавлена в каталог». "
+        "Поля формы очищены. Строка статуса обновлена: «Всего книг: 11»."
+    )
+    add_figure_caption(doc, "Рис. 11. Добавление новой книги «Идиот»")
+
+    add_subheading(doc, "Обработка ошибочного ввода")
+    add_paragraph(doc,
+        "Проверены следующие некорректные сценарии:"
+    )
+    errs = [
+        "пустое поле «Название» → messagebox.showerror «Заполните все обязательные поля»;",
+        "год «19аб» (не число) → ошибка «Год издания: целое число в диапазоне 1000–2100»;",
+        "цена «-500» (отрицательная) → ошибка «Цена должна быть положительным числом»;",
+        "пустой поисковый запрос → messagebox.showwarning «Введите поисковый запрос».",
+    ]
+    for e in errs:
+        p = doc.add_paragraph(style="List Bullet")
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+        run = p.add_run(e)
+        _apply_tnr_font(run, size=14)
+    add_figure_caption(doc, "Рис. 12. Диалоговые окна обработки ошибок валидации")
+    add_paragraph(doc,
+        "Все проверки пройдены успешно: некорректный ввод не приводит к исключениям, "
+        "пользователь получает информативные сообщения об ошибках, "
+        "приложение остаётся работоспособным и готовым к дальнейшей работе."
+    )
+
+    # Вывод
+    add_heading(doc, "Вывод")
+    add_paragraph(doc,
+        "В ходе выполнения лабораторной работы изучены принципы разработки "
+        "GUI-приложений на языке Python с использованием стандартной библиотеки "
+        "Tkinter. Освоена архитектура событийно-ориентированного программирования: "
+        "главный цикл mainloop(), привязка обработчиков через command и bind(), "
+        "работа с переменными StringVar. Изучены виджеты Label, Entry, Button, "
+        "Radiobutton, Listbox, Scrollbar, Text, ttk.Combobox и оба менеджера "
+        "геометрии — pack() и grid()."
+    )
+    add_paragraph(doc,
+        "Разработано полнофункциональное двухпанельное приложение для управления "
+        "каталогом книжного магазина: реализованы поиск по трём критериям с "
+        "фильтрацией, отображение полного каталога, форма добавления книги "
+        "с трёхуровневой валидацией (строковые поля, диапазон года, "
+        "положительность цены) и динамическим обновлением справочного блока. "
+        "Тестирование подтвердило корректную обработку всех штатных и "
+        "ошибочных сценариев — пользователь получает понятные сообщения "
+        "без аварийного завершения программы."
+    )
+    add_paragraph(doc,
+        "Полученные навыки применимы при разработке любых desktop-приложений "
+        "с графическим интерфейсом: инструментов автоматизации, конфигураторов, "
+        "клиентских приложений для локальных баз данных. "
+        "Tkinter обеспечивает кроссплатформенность (Windows, macOS, Linux) "
+        "без дополнительных зависимостей, что делает её оптимальным выбором "
+        "для учебных проектов и небольших прикладных утилит."
+    )
+
+    # Приложение 1
+    add_heading(doc, "Приложение 1")
+    add_paragraph(doc,
+        "Полный исходный код приложения с графическим интерфейсом (lab9/main.py):"
+    )
+    add_code_block(doc, LAB9_FULL_CODE)
+
+    doc.save(output_path)
+    print(f"[OK] ЛР9: {output_path}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  ТОЧКА ВХОДА
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -2995,6 +3670,7 @@ if __name__ == "__main__":
     os.makedirs(f"{BASE}/lab6", exist_ok=True)
     os.makedirs(f"{BASE}/lab7", exist_ok=True)
     os.makedirs(f"{BASE}/lab8", exist_ok=True)
+    os.makedirs(f"{BASE}/lab9", exist_ok=True)
 
     generate_lab3(f"{BASE}/lab3/report.docx")
     generate_lab4(f"{BASE}/lab4/report.docx")
@@ -3002,5 +3678,6 @@ if __name__ == "__main__":
     generate_lab6(f"{BASE}/lab6/report.docx")
     generate_lab7(f"{BASE}/lab7/report.docx")
     generate_lab8(f"{BASE}/lab8/report.docx")
+    generate_lab9(f"{BASE}/lab9/report.docx")
 
-    print("\n[ГОТОВО] Все 6 отчётов сгенерированы.")
+    print("\n[ГОТОВО] Все 7 отчётов сгенерированы.")
