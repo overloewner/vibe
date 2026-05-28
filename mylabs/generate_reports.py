@@ -1512,6 +1512,7 @@ def generate_lab5(output_path):
 
 LAB6_PYDANTIC_CODE = '''from pydantic import BaseModel, Field
 from typing import Optional
+from datetime import date
 
 class BookBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
@@ -1524,34 +1525,125 @@ class BookBase(BaseModel):
 class BookCreate(BookBase):
     pass
 
+class BookUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=200)
+    author: Optional[str] = Field(None, min_length=1, max_length=100)
+    genre: Optional[str] = Field(None, min_length=1, max_length=60)
+    year: Optional[int] = Field(None, ge=1000, le=2100)
+    price: Optional[float] = Field(None, gt=0)
+    stock_count: Optional[int] = Field(None, ge=0)
+
 class BookOut(BookBase):
     id: int
+    model_config = {"from_attributes": True}
+
+class OrderCreate(BaseModel):
+    book_id: int = Field(..., gt=0)
+    customer_name: str = Field(..., min_length=2, max_length=100)
+    quantity: int = Field(..., ge=1, le=100)
+
+class OrderOut(OrderCreate):
+    id: int
+    order_date: date
     model_config = {"from_attributes": True}'''
+
+LAB6_STORAGE_CODE = '''# In-memory хранилища (без подключения к БД)
+books_db: dict[int, dict] = {}
+categories_db: dict[int, dict] = {}
+orders_db: dict[int, dict] = {}
+
+_book_counter = 0
+_cat_counter  = 0
+_order_counter = 0
+
+def _next_book_id() -> int:
+    global _book_counter
+    _book_counter += 1
+    return _book_counter
+
+def _next_order_id() -> int:
+    global _order_counter
+    _order_counter += 1
+    return _order_counter
+
+# Бизнес-логика: создание заказа с проверкой наличия товара
+@orders_router.post("/", response_model=OrderOut, status_code=201)
+def create_order(order: OrderCreate):
+    if order.book_id not in books_db:
+        raise HTTPException(status_code=404, detail="Книга не найдена")
+    book = books_db[order.book_id]
+    if book["stock_count"] < order.quantity:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недостаточно товара. В наличии: {book['stock_count']}"
+        )
+    book["stock_count"] -= order.quantity       # уменьшаем остаток
+    oid = _next_order_id()
+    record = {
+        "id": oid,
+        "book_id": order.book_id,
+        "customer_name": order.customer_name,
+        "quantity": order.quantity,
+        "order_date": date.today(),
+    }
+    orders_db[oid] = record
+    return record
+
+@orders_router.delete("/{order_id}", status_code=204)
+def delete_order(order_id: int):
+    if order_id not in orders_db:
+        raise HTTPException(status_code=404, detail="Заказ не найден")
+    order = orders_db[order_id]
+    if order["book_id"] in books_db:
+        books_db[order["book_id"]]["stock_count"] += order["quantity"]
+    del orders_db[order_id]'''
 
 LAB6_ROUTER_CODE = '''from fastapi import APIRouter, HTTPException, Query
 
 books_router = APIRouter(prefix="/books", tags=["Книги"])
 
-@books_router.get("/", response_model=List[BookOut])
+@books_router.get("/", response_model=List[BookOut], summary="Список книг")
 def list_books(
     genre: Optional[str] = Query(None, description="Фильтр по жанру"),
     search: Optional[str] = Query(None, description="Поиск по названию"),
+    min_price: Optional[float] = Query(None, gt=0),
+    max_price: Optional[float] = Query(None, gt=0),
 ):
     result = list(books_db.values())
     if genre:
         result = [b for b in result if b["genre"].lower() == genre.lower()]
     if search:
         result = [b for b in result if search.lower() in b["title"].lower()]
+    if min_price is not None:
+        result = [b for b in result if b["price"] >= min_price]
+    if max_price is not None:
+        result = [b for b in result if b["price"] <= max_price]
     return result
 
-@books_router.post("/", response_model=BookOut, status_code=201)
+@books_router.get("/{book_id}", response_model=BookOut, summary="Книга по ID")
+def get_book(book_id: int):
+    if book_id not in books_db:
+        raise HTTPException(status_code=404, detail="Книга не найдена")
+    return books_db[book_id]
+
+@books_router.post("/", response_model=BookOut, status_code=201, summary="Добавить книгу")
 def create_book(book: BookCreate):
     bid = _next_book_id()
     record = {"id": bid, **book.model_dump()}
     books_db[bid] = record
     return record
 
-@books_router.delete("/{book_id}", status_code=204)
+@books_router.put("/{book_id}", response_model=BookOut, summary="Обновить книгу")
+def update_book(book_id: int, book: BookUpdate):
+    if book_id not in books_db:
+        raise HTTPException(status_code=404, detail="Книга не найдена")
+    existing = books_db[book_id]
+    update_data = book.model_dump(exclude_unset=True)
+    existing.update(update_data)
+    books_db[book_id] = existing
+    return existing
+
+@books_router.delete("/{book_id}", status_code=204, summary="Удалить книгу")
 def delete_book(book_id: int):
     if book_id not in books_db:
         raise HTTPException(status_code=404, detail="Книга не найдена")
@@ -1561,21 +1653,44 @@ LAB6_APP_CODE = '''from fastapi import FastAPI
 
 app = FastAPI(
     title="Bookstore API",
-    description="REST API для книжного магазина. ЛР №6.",
+    description="REST API для книжного магазина. Лабораторная работа №6.",
     version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 app.include_router(books_router)
 app.include_router(categories_router)
 app.include_router(orders_router)
 
-@app.get("/")
+@app.get("/", tags=["Root"])
 def root():
-    return {"message": "Bookstore API", "docs": "/docs"}
+    return {"message": "Bookstore API", "docs": "/docs", "version": "1.0.0"}
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)'''
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)'''
+
+
+LAB6_SWAGGER_RESPONSE = '''{
+  "id": 1,
+  "title": "Мастер и Маргарита",
+  "author": "Булгаков М.А.",
+  "genre": "Роман",
+  "year": 1967,
+  "price": 450.0,
+  "stock_count": 10
+}'''
+
+LAB6_VALIDATION_ERROR = '''{
+  "detail": [
+    {
+      "type": "greater_than",
+      "loc": ["body", "price"],
+      "msg": "Input should be greater than 0",
+      "input": -100
+    }
+  ]
+}'''
 
 
 def generate_lab6(output_path):
@@ -1586,28 +1701,87 @@ def generate_lab6(output_path):
 
     # Цель
     _inline_bold_para(doc,
-        "1. Цель и задачи: ",
-        "изучить принципы разработки RESTful веб-сервисов на языке Python "
-        "с использованием фреймворка FastAPI; освоить протокол HTTP, архитектурный "
-        "стиль REST, валидацию данных с Pydantic и автоматическую генерацию "
-        "документации Swagger UI."
+        "Цель: ",
+        "разработка функционирующего REST API на фреймворке FastAPI для управления "
+        "книжным магазином, предусматривающего реализацию нескольких эндпоинтов с "
+        "различными HTTP-методами и их тестирование через Swagger UI."
     )
 
-    # 2. Теоретическая часть
-    add_heading(doc, "2. Теоретическая часть")
+    # Постановка задачи
+    _inline_bold_para(doc,
+        "Постановка задачи: ",
+        "запустить REST API на фреймворке FastAPI для предметной области «Книжный "
+        "магазин», реализовав эндпоинты с использованием методов GET, POST, PUT, "
+        "DELETE и обеспечив возможность их тестирования через Swagger UI или браузер. "
+        "Для достижения цели необходимо решить следующие задачи:"
+    )
+    task_items = [
+        "изучить принципы работы протокола HTTP (методы, коды статуса, заголовки);",
+        "изучить основы архитектурного стиля REST и возможности фреймворка FastAPI;",
+        "выбрать предметную область и описать основные сущности (ресурсы);",
+        "спроектировать REST API: определить эндпоинты и HTTP-методы для каждой сущности;",
+        "реализовать CRUD-операции: GET (получение), POST (создание), PUT (обновление), DELETE (удаление);",
+        "реализовать Path Parameters и Query Parameters для фильтрации данных;",
+        "использовать Pydantic-модели для валидации входных и выходных данных;",
+        "организовать хранение данных в памяти (in-memory);",
+        "протестировать разработанные эндпоинты через Swagger UI (/docs).",
+    ]
+    for item in task_items:
+        add_bullet(doc, item)
 
-    add_heading(doc, "2a. Протокол HTTP")
+    # Введение
+    add_heading(doc, "Введение")
     add_paragraph(doc,
-        "HTTP (HyperText Transfer Protocol) — протокол передачи гипертекста, "
-        "на котором основана передача данных в сети Интернет. "
-        "HTTP-запрос состоит из метода, URI, заголовков и тела. "
-        "Основные методы:"
+        "В современных условиях разработки программного обеспечения значительная "
+        "часть прикладных систем строится по клиент-серверной модели, где взаимодействие "
+        "между компонентами осуществляется через программные интерфейсы. REST API является "
+        "одним из наиболее распространённых способов организации такого взаимодействия, "
+        "поскольку обеспечивает стандартизированный обмен данными, предсказуемость "
+        "HTTP-методов и удобство интеграции с веб-клиентами, мобильными приложениями "
+        "и внешними сервисами."
     )
+    add_paragraph(doc,
+        "Для практической реализации серверной части приложения в рамках лабораторной "
+        "работы используется FastAPI — современный Python-фреймворк для построения "
+        "высокопроизводительных веб-сервисов. Его преимущества заключаются в поддержке "
+        "строгой типизации, встроенной валидации данных на базе Pydantic, автоматической "
+        "генерации OpenAPI-документации и удобной маршрутизации через APIRouter. "
+        "Применение данного инструмента позволяет не только быстро создавать API, "
+        "но и соблюдать инженерную дисциплину при проектировании структуры приложения."
+    )
+    add_paragraph(doc,
+        "Целью работы является закрепление навыков проектирования и реализации "
+        "REST-совместимого backend-приложения: изучение принципов маршрутизации, "
+        "обработки HTTP-запросов различных методов, описания схем входных и выходных "
+        "данных, а также тестирования созданных эндпоинтов. Полученный результат "
+        "формирует основу для дальнейшего расширения проекта, например подключения "
+        "базы данных, аутентификации пользователей и механизмов защиты от типовых "
+        "уязвимостей веб-приложений."
+    )
+
+    # Теоретическая часть
+    add_heading(doc, "Теоретическая часть")
+
+    add_subheading(doc, "Протокол HTTP")
+    add_paragraph(doc,
+        "HTTP (HyperText Transfer Protocol) — протокол прикладного уровня, используемый "
+        "для передачи данных в сети Интернет. Основу HTTP составляет модель «клиент-сервер»: "
+        "клиент инициирует соединение и отправляет запрос, сервер принимает запрос, "
+        "обрабатывает его и возвращает ответ. Протокол является stateless — сервер "
+        "не хранит информацию о предыдущих запросах клиента, каждый запрос должен "
+        "содержать всю необходимую информацию для обработки."
+    )
+    add_paragraph(doc,
+        "HTTP-запрос включает в себя: стартовую строку (метод, URL, версия протокола), "
+        "заголовки (метаинформация о запросе) и тело запроса (опционально, например JSON-данные). "
+        "HTTP-ответ содержит: статусную строку (версия, код, пояснение), заголовки и тело ответа."
+    )
+    add_paragraph(doc, "Основные HTTP-методы:")
     http_methods = [
-        ("GET", "получение ресурса (идемпотентный, безопасный);"),
-        ("POST", "создание нового ресурса;"),
-        ("PUT", "полное обновление ресурса;"),
-        ("PATCH", "частичное обновление;"),
+        ("GET", "получение ресурса (идемпотентный, безопасный, не изменяет состояние системы);"),
+        ("POST", "создание нового ресурса или отправка данных на сервер;"),
+        ("PUT", "полное обновление существующего ресурса;"),
+        ("PATCH", "частичное обновление ресурса;"),
         ("DELETE", "удаление ресурса."),
     ]
     for m, d in http_methods:
@@ -1621,69 +1795,85 @@ def generate_lab6(output_path):
         r2 = p.add_run(d)
         _apply_tnr_font(r2, size=14)
     add_paragraph(doc,
-        "HTTP-ответы возвращают коды статуса: 200 OK, 201 Created, "
-        "204 No Content, 400 Bad Request, 401 Unauthorized, "
-        "403 Forbidden, 404 Not Found, 422 Unprocessable Entity, "
-        "500 Internal Server Error."
+        "Коды состояния HTTP делятся на классы: 1xx — информационные; 2xx — успешные "
+        "(200 OK, 201 Created, 204 No Content); 3xx — перенаправления; "
+        "4xx — ошибки клиента (400 Bad Request, 404 Not Found, 422 Unprocessable Entity); "
+        "5xx — ошибки сервера. Методы GET, PUT и DELETE являются идемпотентными — "
+        "многократное выполнение одного запроса приводит к одному результату. "
+        "POST не является идемпотентным."
     )
 
-    add_heading(doc, "2b. REST API")
+    add_subheading(doc, "Основы REST API")
     add_paragraph(doc,
-        "REST (Representational State Transfer) — архитектурный стиль для "
-        "проектирования распределённых приложений. Основные ограничения REST:"
+        "REST (Representational State Transfer) — архитектурный стиль для построения "
+        "веб-сервисов. REST API широко используется в веб-разработке для интеграции "
+        "сервисов и приложений. Ресурс — это любая сущность, к которой можно получить "
+        "доступ через API (пользователи, товары, заказы). Эндпоинт — конкретный URL-адрес, "
+        "по которому доступен ресурс или операция над ним."
     )
+    add_paragraph(doc, "REST API основан на следующих ключевых принципах:")
     rest_constraints = [
-        "Единый интерфейс (Uniform Interface) — стандартизированные методы и URL;",
-        "Отсутствие состояния (Stateless) — каждый запрос самодостаточен;",
-        "Кэширование (Cacheable) — ответы помечаются как кэшируемые/нет;",
-        "Клиент-сервер (Client-Server) — разделение ответственности;",
-        "Многоуровневость (Layered System) — промежуточные серверы прозрачны;",
-        "Код по требованию (Code on Demand) — опциональная передача кода.",
+        "Клиент-серверная архитектура — разделение клиентской и серверной частей, что улучшает масштабируемость;",
+        "Отсутствие состояния (Stateless) — каждый запрос обрабатывается сервером отдельно и не зависит от предыдущих;",
+        "Кэширование (Cacheable) — ответы помечаются как кэшируемые для снижения нагрузки на сервер;",
+        "Единообразие интерфейса (Uniform Interface) — стандартизированные HTTP-методы и URL для работы с ресурсами;",
+        "Многоуровневая архитектура (Layered System) — промежуточные серверы (прокси, балансировщики) прозрачны для клиента.",
     ]
     for c in rest_constraints:
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        p.paragraph_format.first_line_indent = Cm(0)
-        p.paragraph_format.left_indent = Cm(1.25)
-        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-        r = p.add_run(f"— {c}")
-        _apply_tnr_font(r, size=14)
+        add_bullet(doc, c)
 
-    add_heading(doc, "2c. FastAPI")
+    add_subheading(doc, "Фреймворк FastAPI")
     add_paragraph(doc,
-        "FastAPI — современный высокопроизводительный Python-фреймворк для создания API. "
-        "Ключевые особенности:"
+        "FastAPI — современный высокопроизводительный веб-фреймворк для создания API "
+        "на языке Python. Основан на стандарте ASGI (Asynchronous Server Gateway Interface), "
+        "что обеспечивает высокую производительность, сравнимую с Node.js и Go."
     )
+    add_paragraph(doc, "К основным возможностям FastAPI относятся:")
     fastapi_features = [
-        "Pydantic — автоматическая валидация и сериализация данных с аннотациями типов;",
-        "Swagger UI / ReDoc — автоматическая интерактивная документация;",
-        "Асинхронность (async/await) — поддержка ASGI для высокой производительности;",
-        "Dependency Injection — удобная система зависимостей для переиспользования логики;",
-        "APIRouter — модульная организация маршрутов.",
+        "Высокая производительность — основан на Starlette (ASGI) и Pydantic;",
+        "Автоматическая валидация данных — через интеграцию с Pydantic и аннотации типов Python;",
+        "Автоматическая генерация документации — Swagger UI (/docs) и ReDoc (/redoc);",
+        "Поддержка асинхронного программирования с использованием async/await;",
+        "Удобная работа с Path Parameters и Query Parameters с автоматическим приведением типов;",
+        "APIRouter — модульная организация маршрутов по сущностям приложения.",
     ]
     for f in fastapi_features:
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        p.paragraph_format.first_line_indent = Cm(0)
-        p.paragraph_format.left_indent = Cm(1.25)
-        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-        r = p.add_run(f"— {f}")
-        _apply_tnr_font(r, size=14)
+        add_bullet(doc, f)
 
-    # 3. Предметная область
-    add_heading(doc, "3. Предметная область: Книжный магазин")
+    # Технологический стек
+    add_heading(doc, "Используемый технологический стек")
     add_paragraph(doc,
-        "Для выполнения работы выбрана предметная область «Книжный магазин». "
-        "Приложение управляет тремя сущностями:"
+        "Для реализации данной лабораторной работы использован следующий стек технологий:"
+    )
+    tech_items = [
+        "Язык программирования: Python 3.11;",
+        "Веб-фреймворк: FastAPI — для создания REST API и обработки HTTP-запросов;",
+        "Библиотека валидации данных: Pydantic v2 — для описания моделей и проверки входящих данных;",
+        "ASGI-сервер: Uvicorn — для запуска приложения FastAPI;",
+        "Хранение данных: in-memory (словари Python) — временное хранение данных без подключения к БД;",
+        "Тестирование: встроенная интерактивная документация Swagger UI (доступ по адресу /docs);",
+        "Среда разработки: Visual Studio Code.",
+    ]
+    for item in tech_items:
+        add_bullet(doc, item)
+
+    # Предметная область
+    add_heading(doc, "Описание предметной области")
+    add_paragraph(doc,
+        "В качестве предметной области выбрана система управления книжным магазином "
+        "(Bookstore API). Данный выбор обусловлен актуальностью задачи автоматизации "
+        "работы интернет-магазина, наглядностью CRUD-операций и возможностью "
+        "продемонстрировать бизнес-логику (контроль складских остатков при создании "
+        "заказа). Приложение управляет тремя основными сущностями:"
     )
     entities = [
-        ("Book", "id, title, author, genre, year, price, stock_count — карточка книги;"),
-        ("Category", "id, name, description — категория (жанр) книг;"),
-        ("Order", "id, book_id, customer_name, quantity, order_date — заказ покупателя."),
+        ("Book", "id, title, author, genre, year, price, stock_count — карточка книги с полями для хранения основной информации и количества экземпляров на складе;"),
+        ("Category", "id, name, description — категория (жанр) книг для классификации ассортимента;"),
+        ("Order", "id, book_id, customer_name, quantity, order_date — заказ покупателя, связанный с конкретной книгой."),
     ]
     for e, d in entities:
         p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         p.paragraph_format.first_line_indent = Cm(0)
         p.paragraph_format.left_indent = Cm(1.25)
         p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
@@ -1692,104 +1882,185 @@ def generate_lab6(output_path):
         r2 = p.add_run(d)
         _apply_tnr_font(r2, size=14)
 
-    # 4. Проектирование API
-    add_heading(doc, "4. Проектирование API")
+    # Проектирование API
+    add_heading(doc, "Проектирование API")
+    add_paragraph(doc,
+        "При проектировании для каждого ресурса определён набор CRUD-эндпоинтов. "
+        "Предусмотрены Path Parameters для идентификации объекта ({id}) и "
+        "Query Parameters для фильтрации (genre, search, min_price, max_price). "
+        "Полный перечень спроектированных эндпоинтов:"
+    )
     api_headers = ["Метод", "URL", "Описание", "Параметры"]
     api_rows = [
-        ["GET",    "/",                  "Корневой эндпоинт, информация об API",  "—"],
-        ["GET",    "/books/",            "Список всех книг",                      "genre, search, min_price, max_price"],
+        ["GET",    "/",                  "Корневой эндпоинт",                     "—"],
+        ["GET",    "/books/",            "Список всех книг с фильтрацией",         "genre, search, min_price, max_price (query)"],
         ["GET",    "/books/{id}",        "Получить книгу по ID",                  "book_id (path)"],
         ["POST",   "/books/",            "Добавить новую книгу",                  "BookCreate (body)"],
-        ["PUT",    "/books/{id}",        "Обновить книгу (полностью)",             "book_id (path), BookUpdate (body)"],
+        ["PUT",    "/books/{id}",        "Обновить книгу",                        "book_id (path), BookUpdate (body)"],
         ["DELETE", "/books/{id}",        "Удалить книгу",                         "book_id (path)"],
         ["GET",    "/categories/",       "Список всех категорий",                 "—"],
         ["GET",    "/categories/{id}",   "Получить категорию по ID",              "cat_id (path)"],
         ["POST",   "/categories/",       "Создать категорию",                     "CategoryCreate (body)"],
         ["PUT",    "/categories/{id}",   "Обновить категорию",                    "cat_id (path), CategoryCreate (body)"],
         ["DELETE", "/categories/{id}",   "Удалить категорию",                     "cat_id (path)"],
-        ["GET",    "/orders/",           "Список заказов (фильтр по покупателю)", "customer_name (query)"],
+        ["GET",    "/orders/",           "Список заказов",                        "customer_name (query)"],
         ["GET",    "/orders/{id}",       "Получить заказ по ID",                  "order_id (path)"],
         ["POST",   "/orders/",           "Создать заказ",                         "OrderCreate (body)"],
-        ["DELETE", "/orders/{id}",       "Отменить заказ",                        "order_id (path)"],
+        ["DELETE", "/orders/{id}",       "Отменить заказ (возврат на склад)",     "order_id (path)"],
     ]
     add_table(doc, api_headers, api_rows, caption="Таблица 1. Эндпоинты Bookstore API")
 
-    # 5. Архитектура
-    add_heading(doc, "5. Архитектура приложения")
+    # Реализация
+    add_heading(doc, "Реализация")
+
+    add_subheading(doc, "Выбор предметной области и обоснование архитектуры")
     add_paragraph(doc,
-        "Приложение организовано в виде единого файла main.py с модульной структурой "
-        "на основе APIRouter. Логические блоки:"
+        "Архитектура приложения построена по модульному принципу в рамках единого "
+        "файла main.py с разделением на логические слои: Pydantic-схемы (модели данных), "
+        "in-memory хранилище с бизнес-логикой и API-роутеры. Такой подход обеспечивает "
+        "удобство сопровождения, упрощает тестирование и позволяет в дальнейшем заменить "
+        "временное хранилище на полноценную базу данных (SQLite, PostgreSQL) без изменения "
+        "внешнего API. Основные компоненты приложения:"
     )
     arch_parts = [
-        "Pydantic-модели (BookBase/BookCreate/BookOut, CategoryBase, OrderBase/OrderCreate/OrderOut) — валидация и сериализация;",
-        "In-memory хранилище (books_db, categories_db, orders_db — словари) — хранение данных в памяти;",
-        "Функции-счётчики ID (_next_book_id, _next_cat_id, _next_order_id) — автоинкремент;",
-        "APIRouter для каждой сущности (books_router, categories_router, orders_router) — маршрутизация;",
-        "FastAPI app — сборка всех роутеров, настройка метаданных и Swagger UI.",
+        "Pydantic-модели (BookCreate/BookUpdate/BookOut, CategoryCreate, OrderCreate/OrderOut) — валидация и сериализация данных;",
+        "In-memory хранилище (books_db, categories_db, orders_db — словари Python) — временное хранение данных;",
+        "Функции-счётчики ID (_next_book_id, _next_cat_id, _next_order_id) — автоинкремент первичных ключей;",
+        "APIRouter для каждой сущности (books_router, categories_router, orders_router) — модульная маршрутизация;",
+        "FastAPI app — точка сборки всех роутеров и настройка метаданных OpenAPI.",
     ]
     for a in arch_parts:
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        p.paragraph_format.first_line_indent = Cm(0)
-        p.paragraph_format.left_indent = Cm(1.25)
-        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-        r = p.add_run(f"— {a}")
-        _apply_tnr_font(r, size=14)
+        add_bullet(doc, a)
 
-    # 6. Реализация
-    add_heading(doc, "6. Реализация")
-    add_paragraph(doc, "Pydantic-модели для книги:")
+    add_subheading(doc, "Реализация моделей данных и валидации")
+    add_paragraph(doc,
+        "Для строгой типизации и автоматической проверки входящих данных использована "
+        "библиотека Pydantic v2. Основные схемы включают модели для создания, обновления "
+        "и возврата данных о книгах и заказах. Особое внимание уделено валидации: "
+        "цена книги должна быть строго положительной (gt=0), год издания — в диапазоне "
+        "1000–2100, количество в заказе — от 1 до 100. Модель BookUpdate использует "
+        "только Optional-поля для поддержки частичного обновления через PUT:"
+    )
     add_code_block(doc, LAB6_PYDANTIC_CODE)
-    add_figure_caption(doc, "Рис. 1. Pydantic-модели для сущности Book")
+    add_figure_caption(doc, "Рис. 1. Pydantic-модели для сущностей Book и Order")
 
-    add_paragraph(doc, "Определение роутера для книг (CRUD-операции):")
+    add_subheading(doc, "Хранение данных и бизнес-логика сервисного слоя")
+    add_paragraph(doc,
+        "Данные хранятся в словарях Python (in-memory). Ключевая особенность реализации — "
+        "бизнес-логика заказа: при создании заказа проверяется наличие книги в базе и "
+        "достаточность остатка на складе. При нехватке товара возвращается статус "
+        "400 Bad Request. При успешном создании заказа остаток stock_count уменьшается "
+        "на количество заказанных экземпляров. При отмене заказа (DELETE /orders/{id}) "
+        "остаток автоматически восстанавливается:"
+    )
+    add_code_block(doc, LAB6_STORAGE_CODE)
+    add_figure_caption(doc, "Рис. 2. In-memory хранилище и бизнес-логика заказов")
+
+    add_subheading(doc, "Маршрутизация и API-эндпоинты")
+    add_paragraph(doc,
+        "Маршруты сгруппированы через APIRouter с соответствующими префиксами и тегами "
+        "для автоматической группировки в документации Swagger UI. Реализованы все основные "
+        "CRUD-операции для книг: GET (список с мультифильтрацией и получение по ID), "
+        "POST (создание), PUT (обновление через model_dump(exclude_unset=True)), "
+        "DELETE (удаление). Реализация следует принципам REST: GET — идемпотентен, "
+        "POST возвращает 201 Created, DELETE — 204 No Content:"
+    )
     add_code_block(doc, LAB6_ROUTER_CODE)
-    add_figure_caption(doc, "Рис. 2. APIRouter для книг: GET (список + фильтры), POST, DELETE")
+    add_figure_caption(doc, "Рис. 3. APIRouter для книг: полный набор CRUD-эндпоинтов")
 
-    add_paragraph(doc, "Создание FastAPI-приложения:")
+    add_subheading(doc, "Точка входа и конфигурация приложения")
+    add_paragraph(doc,
+        "Инициализация экземпляра FastAPI выполнена с подключением роутеров и "
+        "настройкой метаданных приложения, которые используются для автоматической "
+        "генерации OpenAPI-спецификации. Документация Swagger UI доступна по адресу "
+        "/docs, альтернативная документация ReDoc — по адресу /redoc:"
+    )
     add_code_block(doc, LAB6_APP_CODE)
-    add_figure_caption(doc, "Рис. 3. Создание и запуск FastAPI-приложения")
+    add_figure_caption(doc, "Рис. 4. Создание и запуск FastAPI-приложения")
 
-    # 7. Тестирование
-    add_heading(doc, "7. Тестирование через Swagger UI")
+    # Тестирование
+    add_heading(doc, "Тестирование через Swagger UI")
     add_paragraph(doc,
-        "Для тестирования API используется встроенная документация Swagger UI "
-        "(доступна по адресу http://localhost:8000/docs). Порядок тестирования:"
+        "Проверка корректности работы API проводилась через встроенный интерфейс "
+        "Swagger UI, автоматически генерируемый FastAPI на основе аннотаций типов "
+        "и Pydantic-схем. Для запуска сервера в терминале выполнялась команда:"
     )
-    test_steps = [
-        "Запуск сервера командой python main.py;",
-        "Открытие браузера и переход по адресу http://localhost:8000/docs;",
-        "POST /books/ — создание тестовой книги (заполнение JSON-тела запроса);",
-        "GET /books/ — проверка, что книга появилась в списке;",
-        "GET /books/?genre=Роман — проверка фильтрации по жанру;",
-        "PUT /books/{id} — обновление цены книги;",
-        "POST /orders/ — создание заказа (проверка уменьшения stock_count);",
-        "DELETE /books/{id} — удаление книги (проверка 404 при повторном запросе).",
-    ]
-    for s in test_steps:
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        p.paragraph_format.first_line_indent = Cm(0)
-        p.paragraph_format.left_indent = Cm(1.25)
-        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-        r = p.add_run(f"— {s}")
-        _apply_tnr_font(r, size=14)
+    add_code_block(doc, "uvicorn main:app --reload --host 127.0.0.1 --port 8000")
+    add_figure_caption(doc, "Рис. 5. Команда запуска сервера и интерфейс Swagger UI (/docs)")
 
-    # 8. Вывод
-    add_heading(doc, "8. Вывод")
     add_paragraph(doc,
-        "В ходе выполнения лабораторной работы был разработан полноценный RESTful API "
-        "для книжного магазина с использованием FastAPI. Реализован полный набор "
-        "CRUD-операций для трёх сущностей (Book, Category, Order), поддержка "
-        "query-параметров для фильтрации и поиска, валидация входных данных "
-        "через Pydantic-модели."
+        "Первым этапом было протестировано создание книги: в теле POST-запроса на "
+        "/books/ переданы валидные данные в формате JSON (название, автор, жанр, год, "
+        "цена, количество на складе). Сервер корректно обработал запрос, вернул статус "
+        "201 Created и сформированный объект с автоматически присвоенным идентификатором:"
+    )
+    add_code_block(doc, LAB6_SWAGGER_RESPONSE)
+    add_figure_caption(doc, "Рис. 6. Успешная обработка POST /books/ — статус 201 Created")
+
+    add_paragraph(doc,
+        "Далее проверена работа методов чтения и фильтрации. GET-запрос к /books/ "
+        "с параметром genre=Роман вернул только книги нужного жанра со статусом 200 OK. "
+        "GET /books/{id} с корректным идентификатором вернул полную запись. "
+        "PUT /books/{id} с частичным набором полей корректно применил изменения "
+        "благодаря использованию model_dump(exclude_unset=True) — неизменённые поля "
+        "остались нетронутыми."
+    )
+    add_figure_caption(doc, "Рис. 7. Проверка GET с фильтрацией по жанру и PUT обновления")
+
+    add_paragraph(doc,
+        "Отдельно была проверена бизнес-логика заказов: создан заказ на 5 экземпляров "
+        "книги с начальным stock_count=10. После успешного POST /orders/ остаток "
+        "уменьшился до 5. При попытке заказать 10 экземпляров при остатке 5 сервер "
+        "вернул статус 400 Bad Request с описанием ошибки. При отмене заказа "
+        "(DELETE /orders/{id}) остаток был автоматически восстановлен."
+    )
+    add_figure_caption(doc, "Рис. 8. Тестирование бизнес-логики заказов и проверки остатка")
+
+    add_paragraph(doc,
+        "Также была проверена встроенная валидация Pydantic: при отправке запроса "
+        "с нарушением схемы (отрицательная цена, год вне диапазона 1000–2100) "
+        "фреймворк автоматически отклонил запрос, вернув статус 422 Unprocessable Entity "
+        "с детальным описанием ошибок в формате JSON:"
+    )
+    add_code_block(doc, LAB6_VALIDATION_ERROR)
+    add_figure_caption(doc, "Рис. 9. Ответ при невалидных данных — статус 422")
+
+    add_paragraph(doc,
+        "Обращение к несуществующему идентификатору через GET, PUT или DELETE стабильно "
+        "возвращает 404 Not Found. Удаление книги через DELETE /books/{id} завершилось "
+        "возвратом статуса 204 No Content, а повторный GET для удалённой записи "
+        "подтвердил возврат 404. Все эндпоинты работают согласно заявленной "
+        "спецификации, HTTP-методы используются семантически верно."
+    )
+    add_figure_caption(doc, "Рис. 10. Проверка 404 при обращении к несуществующим ресурсам")
+
+    # Вывод
+    add_heading(doc, "Вывод")
+    add_paragraph(doc,
+        "В ходе выполнения лабораторной работы была успешно спроектирована и реализована "
+        "серверная часть веб-приложения в виде REST API на фреймворке FastAPI для "
+        "предметной области «Книжный магазин». Реализован полный набор CRUD-операций "
+        "для трёх сущностей (Book, Category, Order) с поддержкой query-параметров для "
+        "многокритериальной фильтрации (по жанру, названию, ценовому диапазону) и "
+        "Path Parameters для адресации ресурсов."
     )
     add_paragraph(doc,
-        "В процессе работы изучены: протокол HTTP и статус-коды ответов, "
-        "архитектурный стиль REST и его ограничения, фреймворк FastAPI "
-        "(APIRouter, Pydantic, Depends), автоматическая документация Swagger UI. "
-        "Полученные навыки являются основой для разработки серверной части "
-        "любых веб-приложений и микросервисов."
+        "Применение библиотеки Pydantic v2 обеспечило строгую типизацию и автоматическую "
+        "валидацию входных данных, включая проверку диапазонов (цена, год, количество). "
+        "Реализована нетривиальная бизнес-логика: при создании заказа проверяется наличие "
+        "товара на складе и автоматически уменьшается остаток stock_count, при отмене "
+        "заказа остаток восстанавливается. Автоматическая генерация OpenAPI-документации "
+        "(Swagger UI) позволила оперативно тестировать эндпоинты и верифицировать "
+        "структуру запросов и ответов без сторонних инструментов."
+    )
+    add_paragraph(doc,
+        "В процессе работы изучены: протокол HTTP (методы, коды статуса, структура "
+        "запроса и ответа), архитектурный стиль REST и его ограничения, фреймворк "
+        "FastAPI (APIRouter, Pydantic, аннотации типов), принципы проектирования "
+        "REST API с разграничением ресурсов. Полученные навыки являются основой "
+        "для разработки серверной части любых веб-приложений и микросервисов, "
+        "а также для освоения тем безопасности API (JWT-аутентификация, OAuth2) "
+        "в последующих лабораторных работах."
     )
 
     doc.save(output_path)
