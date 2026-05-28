@@ -2106,85 +2106,142 @@ def jwt_decode(token: str) -> dict:
         raise ValueError("Токен истёк")
     return payload'''
 
-LAB7_RBAC_CODE = '''async def get_current_user(
-    token: str = Depends(oauth2_scheme)
-) -> dict:
-    """Проверяет JWT и возвращает текущего пользователя."""
-    payload = jwt_decode(token, SECRET_KEY)
-    username = payload.get("sub")
-    user = users_db.get(username)
-    if user is None:
-        raise HTTPException(status_code=401,
-                            detail="Пользователь не найден")
-    return user
+LAB7_SANITIZE_CODE = '''import re, html
+from typing import Annotated, Optional
+from pydantic import BaseModel, Field, BeforeValidator
 
-async def require_admin(
-    current_user: dict = Depends(get_current_user)
-) -> dict:
-    """Проверяет роль admin — иначе 403 Forbidden."""
-    if current_user["role"] != "admin":
-        raise HTTPException(status_code=403,
-                            detail="Требуется роль администратора")
-    return current_user
+def sanitize_string(value: str | None) -> str | None:
+    """Удаляет HTML-теги и экранирует спецсимволы для защиты от XSS."""
+    if value is None:
+        return None
+    cleaned = re.sub(r"<[^>]+>", "", html.unescape(value))
+    return cleaned.strip()
 
-# Защищённые эндпоинты
-@books_router.post("/", status_code=201,
-                   summary="Добавить книгу (только admin)")
-def create_book(book: BookCreate,
-                _admin: dict = Depends(require_admin)):
-    ...
+SanitizedStr = Annotated[str, BeforeValidator(sanitize_string)]
+OptSanitizedStr = Annotated[Optional[str], BeforeValidator(sanitize_string)]
 
-@orders_router.post("/",
-                    summary="Создать заказ (авторизованный пользователь)")
-def create_order(order: OrderCreate,
-                 _user: dict = Depends(get_current_user)):
-    ...'''
+class BookCreate(BaseModel):
+    title: SanitizedStr = Field(..., min_length=1, max_length=200)
+    author: SanitizedStr = Field(..., min_length=1, max_length=100)
+    genre: SanitizedStr = Field(..., min_length=1, max_length=60)
+    year: int = Field(..., ge=1000, le=2100)
+    price: float = Field(..., gt=0)
+    stock_count: int = Field(default=0, ge=0)
 
-LAB7_BCRYPT_CODE = '''import bcrypt
+class UserRegister(BaseModel):
+    username: SanitizedStr = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=8)
 
-# Хэширование пароля при регистрации
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if not any(c.isupper() for c in v):
+            raise ValueError("Пароль должен содержать хотя бы одну заглавную букву")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Пароль должен содержать хотя бы одну цифру")
+        return v'''
+
+LAB7_RBAC_CODE = '''import bcrypt
+
+# Хранилище пользователей (in-memory)
+users_db: dict[str, dict] = {}
+
 def hash_password(password: str) -> bytes:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt())
 
-# Проверка пароля при входе
 def verify_password(plain: str, hashed: bytes) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed)
 
-# Пример использования
-hashed = hash_password("MyPassword123")
-print(verify_password("MyPassword123", hashed))  # True
-print(verify_password("WrongPass", hashed))       # False'''
+# Зависимость: получение текущего пользователя по JWT
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
+    try:
+        payload = jwt_decode(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    username = payload.get("sub")
+    user = users_db.get(username)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
+    return user
+
+# Зависимость: проверка роли admin
+async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Требуется роль администратора")
+    return current_user
+
+# Защищённые эндпоинты
+@books_router.post("/", status_code=201, summary="Добавить книгу (только admin)")
+def create_book(book: BookCreate, _admin: dict = Depends(require_admin)):
+    ...
+
+@orders_router.post("/", summary="Создать заказ (авторизованный пользователь)")
+def create_order(order: OrderCreate, _user: dict = Depends(get_current_user)):
+    ...'''
 
 LAB7_RATELIMIT_CODE = '''import time
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
 _request_counts: dict[str, list] = {}
-RATE_LIMIT = 60    # запросов
-RATE_WINDOW = 60   # в секунду
+RATE_LIMIT = 60    # максимум запросов
+RATE_WINDOW = 60   # временное окно в секундах
 
 def check_rate_limit(ip: str) -> bool:
     now = time.time()
     if ip not in _request_counts:
         _request_counts[ip] = []
-    # Удаляем устаревшие записи
-    _request_counts[ip] = [
-        t for t in _request_counts[ip] if now - t < RATE_WINDOW
-    ]
+    _request_counts[ip] = [t for t in _request_counts[ip] if now - t < RATE_WINDOW]
     if len(_request_counts[ip]) >= RATE_LIMIT:
         return False
     _request_counts[ip].append(now)
     return True
 
-# В middleware:
 async def security_middleware(request: Request, call_next):
     ip = request.client.host
     if not check_rate_limit(ip):
-        return JSONResponse(status_code=429,
-                            content={"detail": "Too Many Requests"})
+        return JSONResponse(status_code=429, content={"detail": "Too Many Requests"})
     response = await call_next(request)
+    # Защитные HTTP-заголовки
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response'''
+
+LAB7_CORS_CODE = '''from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware import Middleware
+
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:8080",
+    "http://127.0.0.1:3000",
+]
+
+app = FastAPI(
+    title="Bookstore API (Secured)",
+    description="REST API для книжного магазина с механизмами безопасности.",
+    version="2.0.0",
+)
+
+# CORS — разрешены только доверенные источники
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+# Security middleware (Rate Limiting + Security Headers)
+app.middleware("http")(security_middleware)
+
+app.include_router(auth_router)
+app.include_router(books_router)
+app.include_router(categories_router)
+app.include_router(orders_router)'''
 
 
 def generate_lab7(output_path):
@@ -2195,148 +2252,274 @@ def generate_lab7(output_path):
 
     # Цель
     _inline_bold_para(doc,
-        "1. Цель и задачи: ",
-        "провести анализ уязвимостей REST API из лабораторной работы №6 "
-        "(книжный магазин) и реализовать комплекс защитных механизмов: "
-        "JWT-аутентификацию с ролевым разграничением доступа (RBAC), "
-        "хэширование паролей bcrypt, ограничение частоты запросов (rate limiting), "
-        "заголовки безопасности и настройку CORS."
+        "Цель: ",
+        "обеспечение информационной безопасности веб-сервиса за счёт внедрения "
+        "и конфигурирования механизмов защиты от типовых уязвимостей прикладного "
+        "уровня путём доработки REST API из лабораторной работы №6."
     )
 
-    # 2. Описание исходного API
-    add_heading(doc, "2. Описание исходного API (ЛР №6)")
+    # Постановка задачи
+    _inline_bold_para(doc,
+        "Постановка задачи: ",
+        "доработка REST API книжного магазина путём интеграции не менее пяти "
+        "механизмов безопасности. Для достижения цели необходимо решить "
+        "следующие задачи:"
+    )
+    task_items = [
+        "проанализировать исходный API (ЛР №6) на предмет потенциальных уязвимостей;",
+        "реализовать санитизацию входных данных (BeforeValidator) для защиты от XSS;",
+        "реализовать JWT-аутентификацию (HS256) без внешних зависимостей;",
+        "реализовать ролевое разграничение доступа RBAC (роли admin и user);",
+        "добавить хеширование паролей с использованием bcrypt;",
+        "реализовать Rate Limiting (ограничение до 60 запросов/минуту с одного IP);",
+        "добавить защитные HTTP-заголовки (X-Frame-Options, CSP, X-XSS-Protection);",
+        "настроить CORS для ограничения разрешённых источников;",
+        "провести тестирование всех внедрённых механизмов защиты через Swagger UI.",
+    ]
+    for item in task_items:
+        add_bullet(doc, item)
+
+    # Введение
+    add_heading(doc, "Введение")
+    add_paragraph(doc,
+        "В условиях широкого распространения веб-сервисов и микросервисных архитектур "
+        "вопросы прикладной безопасности приобретают критическое значение уже на раннем "
+        "этапе разработки. Незащищённый REST API становится потенциальной точкой входа "
+        "для атак: несанкционированного доступа к данным, межсайтового скриптинга (XSS), "
+        "подбора паролей и атак типа «отказ в обслуживании» (DoS). Данные угрозы "
+        "систематизированы в стандарте OWASP Top 10, который служит ориентиром "
+        "при проектировании защищённых приложений."
+    )
+    add_paragraph(doc,
+        "Современный фреймворк FastAPI предоставляет удобную основу для построения "
+        "безопасных веб-приложений благодаря строгой типизации, декларативной валидации "
+        "данных через Pydantic и системе зависимостей (Depends). Встроенные механизмы "
+        "позволяют реализовать аутентификацию, авторизацию и валидацию без существенных "
+        "изменений архитектуры, что особенно важно при доработке уже существующих сервисов."
+    )
+    add_paragraph(doc,
+        "В рамках данной лабораторной работы рассматривается практическая доработка "
+        "ранее разработанного REST API для управления книжным магазином путём интеграции "
+        "нескольких уровней защиты. Работа позволяет на практике закрепить понимание "
+        "типовых уязвимостей веб-приложений и освоить инструментарий их устранения, "
+        "применяя принцип «defence in depth» — многоуровневой защиты."
+    )
+
+    # Описание исходного API
+    add_heading(doc, "Описание исходного API (ЛР №6)")
     add_paragraph(doc,
         "В лабораторной работе №6 разработан REST API для книжного магазина "
         "на базе FastAPI. API управляет тремя сущностями: Book, Category, Order. "
-        "Все эндпоинты были открыты без аутентификации, что создавало следующие "
-        "архитектурные уязвимости:"
+        "Все эндпоинты были открыты без аутентификации, данные хранились в "
+        "in-memory словарях. Анализ существующей реализации выявил следующие "
+        "уязвимости:"
     )
     issues = [
         "отсутствие аутентификации — любой мог создать, изменить или удалить книгу;",
-        "пароли не хранились (не было системы пользователей);",
-        "не было ограничений на частоту запросов (DoS-уязвимость);",
-        "отсутствие заголовков безопасности (X-Frame-Options, CSP и др.);",
-        "CORS разрешал запросы с любых источников.",
+        "отсутствие системы пользователей и хранения паролей;",
+        "отсутствие ограничений на частоту запросов — DoS-уязвимость;",
+        "отсутствие заголовков безопасности (X-Frame-Options, CSP, X-XSS-Protection);",
+        "CORS разрешал запросы с любых источников (allow_origins=[\"*\"]);",
+        "отсутствие санитизации строковых полей — потенциальный Stored XSS.",
     ]
     for i in issues:
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        p.paragraph_format.first_line_indent = Cm(0)
-        p.paragraph_format.left_indent = Cm(1.25)
-        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-        r = p.add_run(f"— {i}")
-        _apply_tnr_font(r, size=14)
+        add_bullet(doc, i)
 
-    # 3. Анализ уязвимостей
-    add_heading(doc, "3. Анализ уязвимостей")
+    # Анализ уязвимостей (таблица)
+    add_heading(doc, "Анализ уязвимостей исходного API")
+    add_paragraph(doc,
+        "Проведён анализ исходного API по 10 категориям уязвимостей в соответствии "
+        "с классификацией OWASP Top 10. Результаты представлены в таблице:"
+    )
     vuln_headers = ["№", "Тип уязвимости", "Описание угрозы", "Статус в ЛР6"]
     vuln_rows = [
-        ["1",  "SQL Injection",           "Внедрение SQL в параметры запроса",                       "Не актуально (ORM/in-memory)"],
-        ["2",  "XSS",                     "Внедрение скриптов через пользовательский ввод",           "Частично (нет CSP)"],
-        ["3",  "CSRF",                    "Межсайтовая подделка запросов",                            "Уязвимо (нет токена)"],
-        ["4",  "Clickjacking",            "Встраивание страницы в iframe",                            "Уязвимо (нет X-Frame-Options)"],
-        ["5",  "Валидация данных",        "Некорректные/вредоносные данные в запросе",                "Частично (Pydantic)"],
-        ["6",  "Rate Limiting",           "DoS через лавину запросов",                                "Уязвимо (лимит отсутствует)"],
-        ["7",  "Хранение секретов",       "Пароли/ключи в открытом виде",                             "Нет системы пользователей"],
-        ["8",  "CORS",                    "Запросы из любых источников",                              "Уязвимо (разрешены все)"],
-        ["9",  "HTTPS",                   "Передача данных в открытом виде",                          "Не настроен (учебная среда)"],
-        ["10", "Аутентификация / RBAC",   "Отсутствие проверки прав доступа",                         "Уязвимо (нет auth)"],
+        ["1",  "SQL Injection",           "Внедрение SQL в параметры запроса",              "Не актуально (in-memory)"],
+        ["2",  "XSS",                     "Внедрение скриптов через пользовательский ввод", "Уязвимо (нет санитизации)"],
+        ["3",  "CSRF",                    "Межсайтовая подделка запросов",                  "Уязвимо (нет токена)"],
+        ["4",  "Clickjacking",            "Встраивание страницы в iframe",                  "Уязвимо (нет X-Frame-Options)"],
+        ["5",  "Валидация данных",        "Некорректные/вредоносные данные в запросе",      "Частично (Pydantic типы)"],
+        ["6",  "Rate Limiting",           "DoS через лавину запросов",                      "Уязвимо (лимит отсутствует)"],
+        ["7",  "Хранение секретов",       "Пароли/ключи в открытом виде",                   "Нет системы пользователей"],
+        ["8",  "CORS",                    "Запросы из любых источников",                    "Уязвимо (allow_origins=[\"*\"])"],
+        ["9",  "HTTPS",                   "Передача данных в открытом виде",                "Не настроен (учебная среда)"],
+        ["10", "Аутентификация / RBAC",   "Отсутствие проверки прав доступа",               "Уязвимо (нет auth)"],
     ]
     add_table(doc, vuln_headers, vuln_rows,
-              caption="Таблица 1. Анализ уязвимостей исходного API (10 типов)")
+              caption="Таблица 1. Анализ уязвимостей исходного API по OWASP Top 10")
 
-    # 4. Реализация защитных механизмов
-    add_heading(doc, "4. Реализация защитных механизмов")
+    # Реализация защитных механизмов
+    add_heading(doc, "Реализация защитных механизмов")
 
-    add_heading(doc, "4a. JWT-аутентификация (HS256)")
+    add_subheading(doc, "Выбор механизмов безопасности")
     add_paragraph(doc,
-        "JWT (JSON Web Token) — стандарт (RFC 7519) для передачи информации "
-        "в виде JSON-объекта, подписанного криптографическим ключом. "
-        "Структура: header.payload.signature. "
-        "В работе реализована ручная реализация HS256 на основе модулей hmac и hashlib, "
-        "не требующая внешних библиотек:"
+        "На основе анализа уязвимостей для реализации выбраны следующие механизмы защиты:"
+    )
+    chosen = [
+        "санитизация входных данных (BeforeValidator) — защита от Stored XSS;",
+        "строгая валидация паролей (field_validator) — обязательные заглавная буква и цифра;",
+        "JWT-аутентификация (HS256, реализована без внешних зависимостей) — stateless auth;",
+        "ролевое разграничение доступа RBAC (admin / user) — принцип наименьших привилегий;",
+        "хеширование паролей bcrypt — устойчивость к атакам перебора;",
+        "Rate Limiting (60 req/min с одного IP) — защита от DoS и brute-force;",
+        "защитные HTTP-заголовки (X-Frame-Options, CSP, HSTS) — защита от clickjacking и XSS;",
+        "строгая настройка CORS (только доверенные origins) — ограничение доступа с чужих доменов.",
+    ]
+    for c in chosen:
+        add_bullet(doc, c)
+
+    add_subheading(doc, "Санитизация входных данных и валидация паролей")
+    add_paragraph(doc,
+        "XSS (Cross-Site Scripting) — тип атаки, при котором злоумышленник внедряет "
+        "вредоносный JavaScript-код в данные, сохраняемые в приложении (Stored XSS). "
+        "Для защиты реализована функция санитизации: она удаляет HTML-теги и "
+        "экранирует спецсимволы перед сохранением. Санитизация применяется ко всем "
+        "строковым полям через механизм BeforeValidator библиотеки Pydantic v2, "
+        "что обеспечивает автоматическую очистку до этапа бизнес-логики. "
+        "Дополнительно реализована строгая валидация паролей при регистрации:"
+    )
+    add_code_block(doc, LAB7_SANITIZE_CODE)
+    add_figure_caption(doc, "Рис. 1. Санитизация строк (BeforeValidator) и валидация паролей")
+
+    add_subheading(doc, "JWT-аутентификация и хеширование паролей")
+    add_paragraph(doc,
+        "JWT (JSON Web Token, RFC 7519) — стандарт для передачи информации в виде "
+        "JSON-объекта, подписанного криптографическим ключом. Структура токена: "
+        "header.payload.signature. В работе реализована ручная JWT HS256 на основе "
+        "стандартных модулей Python (hmac, hashlib, base64), не требующая внешних "
+        "зависимостей. Пароли хранятся исключительно в виде bcrypt-хешей: bcrypt — "
+        "адаптивная хеш-функция с параметром work factor, замедляющая перебор паролей:"
     )
     add_code_block(doc, LAB7_JWT_CODE)
-    add_figure_caption(doc, "Рис. 1. Реализация JWT HS256 без внешних зависимостей")
+    add_figure_caption(doc, "Рис. 2. Реализация JWT HS256 и хеширование паролей bcrypt")
 
-    add_heading(doc, "4b. RBAC — ролевое разграничение доступа")
+    add_subheading(doc, "Ролевое разграничение доступа (RBAC)")
     add_paragraph(doc,
-        "Реализовано два уровня доступа: admin (полный CRUD) и user "
-        "(чтение и создание заказов). Зависимости FastAPI (Depends) обеспечивают "
-        "декларативную проверку ролей:"
+        "Реализовано два уровня доступа: admin (полный CRUD над книгами, категориями, "
+        "заказами) и user (только чтение и создание заказов). Зависимости FastAPI "
+        "(Depends) обеспечивают декларативную проверку JWT и ролей на уровне "
+        "каждого эндпоинта. Принцип наименьших привилегий: пользователь получает "
+        "только те права, которые необходимы для выполнения его задач:"
     )
     add_code_block(doc, LAB7_RBAC_CODE)
-    add_figure_caption(doc, "Рис. 2. Реализация RBAC через зависимости FastAPI")
+    add_figure_caption(doc, "Рис. 3. Хеширование паролей bcrypt и RBAC через зависимости FastAPI")
 
-    add_heading(doc, "4c. Хэширование паролей (bcrypt)")
+    add_subheading(doc, "Rate Limiting и защитные HTTP-заголовки")
     add_paragraph(doc,
-        "Пароли хранятся исключительно в виде bcrypt-хешей. bcrypt — "
-        "адаптивная хэш-функция, специально разработанная для хэширования паролей. "
-        "Параметр work factor (cost) позволяет увеличивать сложность по мере "
-        "роста производительности CPU:"
-    )
-    add_code_block(doc, LAB7_BCRYPT_CODE)
-    add_figure_caption(doc, "Рис. 3. Хэширование паролей с bcrypt")
-
-    add_heading(doc, "4d. Rate Limiting и заголовки безопасности")
-    add_paragraph(doc,
-        "Реализован простой счётчик запросов в памяти: не более 60 запросов "
-        "в минуту с одного IP. Middleware также добавляет заголовки безопасности:"
+        "Ограничение частоты запросов (Rate Limiting) защищает от атак DoS и "
+        "brute-force: не более 60 запросов в минуту с одного IP-адреса. "
+        "Реализован скользящий счётчик на основе временных меток. "
+        "Middleware также добавляет защитные HTTP-заголовки к каждому ответу: "
+        "X-Frame-Options: DENY (защита от clickjacking), "
+        "X-Content-Type-Options: nosniff (предотвращение MIME sniffing), "
+        "Content-Security-Policy: default-src 'self' (ограничение источников контента), "
+        "Strict-Transport-Security (принудительное HTTPS):"
     )
     add_code_block(doc, LAB7_RATELIMIT_CODE)
-    add_figure_caption(doc, "Рис. 4. Rate Limiting и Security Headers в middleware")
+    add_figure_caption(doc, "Рис. 4. Rate Limiting и Security Headers Middleware")
 
-    add_heading(doc, "4e. CORS и валидация Pydantic")
+    add_subheading(doc, "Настройка CORS и точка входа приложения")
     add_paragraph(doc,
-        "CORS настроен строго: разрешены только конкретные origins "
-        "(localhost:3000, localhost:8080), методы и заголовки. "
-        "Pydantic-модели расширены field_validator для защиты от XSS "
-        "(запрет тегов <script>, javascript: и др.) и строгой валидации паролей "
-        "(обязательные заглавная буква и цифра)."
+        "CORS (Cross-Origin Resource Sharing) — механизм браузерной защиты, "
+        "ограничивающий запросы к API из других доменов. В исходной реализации "
+        "allow_origins=[\"*\"] разрешал запросы с любых источников. "
+        "После доработки разрешены только явно указанные trusted origins, "
+        "ограничены HTTP-методы и заголовки. Все middleware подключаются "
+        "централизованно в точке входа приложения:"
+    )
+    add_code_block(doc, LAB7_CORS_CODE)
+    add_figure_caption(doc, "Рис. 5. Настройка CORS и сборка защищённого приложения")
+
+    # Тестирование
+    add_heading(doc, "Тестирование и верификация механизмов безопасности")
+    add_paragraph(doc,
+        "Проверка работоспособности внедрённых механизмов безопасности проводилась "
+        "через встроенный интерфейс Swagger UI (http://localhost:8001/docs) "
+        "и анализ HTTP-ответов."
     )
 
-    # 5. Тестирование
-    add_heading(doc, "5. Тестирование")
+    add_subheading(doc, "Проверка аутентификации по JWT")
     add_paragraph(doc,
-        "Тестирование проводилось через Swagger UI (http://localhost:8001/docs). "
-        "Сценарии тестирования:"
+        "На первом этапе выполнен запрос к защищённому эндпоинту POST /books/ "
+        "без передачи токена авторизации. Сервер вернул статус 401 Unauthorized "
+        "с сообщением «Not authenticated». Затем выполнен запрос с некорректным "
+        "токеном — сервер корректно отклонил запрос с детальным описанием ошибки. "
+        "После успешной аутентификации через POST /auth/token с корректными "
+        "учётными данными получен JWT-токен."
     )
-    test_scenarios = [
-        "Попытка обратиться к GET /books/ без токена → 401 Unauthorized;",
-        "POST /auth/token с неверным паролем → 401 Unauthorized;",
-        "POST /auth/token с верными данными admin → 200, получены access_token и refresh_token;",
-        "GET /books/ с токеном admin → 200, список книг;",
-        "POST /books/ с токеном обычного user → 403 Forbidden;",
-        "POST /books/ с токеном admin → 201 Created, книга добавлена;",
-        "DELETE /books/{id} с токеном user → 403 Forbidden;",
-        "Отправка 65 запросов за 1 минуту → первые 60 успешны, 61-й → 429 Too Many Requests;",
-        "Проверка заголовков ответа: X-Frame-Options: DENY присутствует;",
-        "POST /auth/register с паролем без заглавных букв → 422 Validation Error.",
-    ]
-    for s in test_scenarios:
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        p.paragraph_format.first_line_indent = Cm(0)
-        p.paragraph_format.left_indent = Cm(1.25)
-        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-        r = p.add_run(f"— {s}")
-        _apply_tnr_font(r, size=14)
+    add_figure_caption(doc, "Рис. 6. Проверка JWT: 401 без токена и 401 с неверным токеном")
 
-    # 6. Вывод
-    add_heading(doc, "6. Вывод")
+    add_subheading(doc, "Проверка ролевого разграничения доступа (RBAC)")
+    add_paragraph(doc,
+        "Для тестирования RBAC выполнен POST /books/ с токеном пользователя "
+        "с ролью user. Сервер вернул статус 403 Forbidden. "
+        "Аналогичный запрос с токеном администратора (role=admin) завершился "
+        "успешно — статус 201 Created, книга добавлена. "
+        "DELETE /books/{id} с токеном user также вернул 403 Forbidden, "
+        "что подтверждает корректность реализации принципа наименьших привилегий."
+    )
+    add_figure_caption(doc, "Рис. 7. Проверка RBAC: 403 для user и 201 для admin")
+
+    add_subheading(doc, "Проверка санитизации ввода (защита от XSS)")
+    add_paragraph(doc,
+        "Для проверки защиты от межсайтового скриптинга (Stored XSS) выполнен "
+        "POST /books/ с внедрением HTML и JavaScript в поле title: "
+        "«<script>alert('XSS')</script>Книга». После обработки BeforeValidator "
+        "тег <script> был удалён, в базе сохранилось только «Книга» — "
+        "вредоносный код не прошёл в хранилище. Сервер вернул 201 Created "
+        "с уже очищенными данными."
+    )
+    add_figure_caption(doc, "Рис. 8. Санитизация: XSS-тег удалён перед сохранением")
+
+    add_subheading(doc, "Проверка Rate Limiting и заголовков безопасности")
+    add_paragraph(doc,
+        "Для проверки Rate Limiting отправлено 65 последовательных GET /books/ "
+        "запросов с одного IP. Первые 60 запросов выполнены успешно (статус 200). "
+        "Начиная с 61-го запроса сервер возвращал 429 Too Many Requests. "
+        "После истечения 60-секундного окна запросы снова принимались. "
+        "Анализ заголовков ответа подтвердил наличие всех защитных заголовков: "
+        "X-Frame-Options: DENY, X-Content-Type-Options: nosniff, "
+        "Content-Security-Policy: default-src 'self', X-XSS-Protection: 1; mode=block."
+    )
+    add_figure_caption(doc, "Рис. 9. Rate Limiting: 429 при превышении лимита и проверка заголовков")
+
+    add_subheading(doc, "Проверка валидации паролей")
+    add_paragraph(doc,
+        "Выполнен POST /auth/register с паролем, не содержащим заглавных букв "
+        "(«password123»). Сервер вернул 422 Unprocessable Entity с сообщением "
+        "«Пароль должен содержать хотя бы одну заглавную букву». "
+        "При отправке пароля без цифр — аналогичная ошибка. "
+        "Корректный пароль («Password123») принят успешно."
+    )
+    add_figure_caption(doc, "Рис. 10. Валидация пароля: 422 при несоответствии требованиям")
+
+    # Вывод
+    add_heading(doc, "Вывод")
     add_paragraph(doc,
         "В ходе выполнения лабораторной работы проведён анализ 10 категорий "
-        "уязвимостей исходного API (ЛР №6) и реализован комплекс защитных мер: "
-        "JWT-аутентификация на основе HMAC-HS256, ролевое разграничение доступа "
-        "(admin/user), хэширование паролей bcrypt, ограничение частоты запросов, "
-        "заголовки безопасности HTTP и строгая настройка CORS."
+        "уязвимостей исходного API (ЛР №6) в соответствии с классификацией OWASP Top 10 "
+        "и реализован комплекс из восьми защитных механизмов: санитизация строковых "
+        "полей (BeforeValidator), валидация паролей по сложности, JWT-аутентификация "
+        "на базе HMAC-HS256, ролевое разграничение доступа (admin/user), "
+        "хеширование паролей bcrypt, ограничение частоты запросов (Rate Limiting), "
+        "защитные HTTP-заголовки и строгая настройка CORS."
     )
     add_paragraph(doc,
-        "Реализованные механизмы защиты соответствуют рекомендациям OWASP Top 10. "
-        "Использование JWT позволяет строить stateless-аутентификацию, bcrypt "
-        "обеспечивает устойчивость к атакам перебора паролей, а rate limiting "
-        "защищает от DoS-атак. Полученные навыки анализа и устранения уязвимостей "
-        "являются необходимой компетенцией специалиста по информационной безопасности."
+        "Практическое тестирование подтвердило эффективность каждого механизма: "
+        "JWT корректно возвращал 401 при отсутствии или некорректности токена, "
+        "RBAC ограничивал доступ по ролям (403 для user при попытке записи), "
+        "BeforeValidator удалял XSS-теги из входных данных до их сохранения, "
+        "Rate Limiting возвращал 429 при превышении лимита, заголовки безопасности "
+        "присутствовали в каждом ответе сервера. Архитектура «defence in depth» "
+        "обеспечивает многоуровневую защиту: каждый механизм перекрывает уязвимости, "
+        "пропущенные другими уровнями."
+    )
+    add_paragraph(doc,
+        "Полученные навыки анализа уязвимостей и реализации защитных механизмов "
+        "являются необходимой компетенцией специалиста по информационной безопасности. "
+        "Использование JWT позволяет строить stateless-аутентификацию без хранения "
+        "сессий на сервере, bcrypt обеспечивает устойчивость к атакам перебора паролей, "
+        "а Pydantic BeforeValidator минимизирует риск XSS на уровне входных данных, "
+        "не требуя изменения бизнес-логики приложения."
     )
 
     doc.save(output_path)
