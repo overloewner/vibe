@@ -5,6 +5,8 @@
 """
 
 import os
+import io
+import tempfile
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
