@@ -3658,6 +3658,787 @@ def generate_lab9(output_path):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  ЛР10 — Автоматизация задач
+# ═══════════════════════════════════════════════════════════════════════════
+
+LAB10_PATHLIB_CODE = '''from pathlib import Path
+
+source = Path("orders")
+target = Path("processed_orders")
+
+# Создание директории (без ошибки если существует)
+target.mkdir(parents=True, exist_ok=True)
+
+# Рекурсивный обход файлов
+for file_path in sorted(source.rglob("*")):
+    if file_path.is_file():
+        ext  = file_path.suffix.lower()  # расширение: .csv, .txt
+        size = file_path.stat().st_size  # размер в байтах
+        name = file_path.stem            # имя без расширения
+        print(f"{file_path.name:30s} | {ext} | {size} байт")
+
+# Перемещение файла
+dest = target / "Заказы" / "order_001.csv"
+dest.parent.mkdir(parents=True, exist_ok=True)'''
+
+LAB10_LOGGING_CODE = '''import logging
+
+def setup_logging():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)-8s | %(message)s",
+        handlers=[
+            logging.StreamHandler(),                             # вывод в консоль
+            logging.FileHandler("automation.log",               # запись в файл
+                                encoding="utf-8"),
+        ],
+    )
+
+def log(message, level="info", preview=False):
+    """Логирует сообщение, добавляя префикс [PREVIEW] в режиме просмотра."""
+    prefix = "[PREVIEW] " if preview else ""
+    getattr(logging, level)(prefix + message)
+
+# Примеры:
+setup_logging()
+logging.info("Запуск автоматизации")
+logging.warning("Исходная папка не найдена")
+logging.error("Ошибка при перемещении файла")'''
+
+LAB10_CONFIG_CODE = '''import sys, csv, json, time, shutil, logging
+from pathlib import Path
+from datetime import datetime
+
+DEFAULT_SOURCE         = Path("orders")
+DEFAULT_TARGET         = Path("processed_orders")
+ARCHIVE_LIFETIME_DAYS  = 30
+
+EXTENSIONS = {
+    "Заказы":  {".csv"},
+    "Отчёты":  {".txt", ".log"},
+    "Данные":  {".json"},
+    "Архивы":  {".zip", ".tar", ".gz", ".rar"},
+}
+TRASH_EXTENSIONS = {".tmp", ".bak", ".old"}'''
+
+LAB10_CATEGORY_CODE = '''def get_category(ext: str) -> str:
+    """Определяет категорию файла по его расширению."""
+    for category, extensions in EXTENSIONS.items():
+        if ext in extensions:
+            return category
+    return "Другое"
+
+# Примеры:
+# get_category(".csv")  → "Заказы"
+# get_category(".json") → "Данные"
+# get_category(".zip")  → "Архивы"
+# get_category(".docx") → "Другое"'''
+
+LAB10_UNIQUE_CODE = '''def generate_unique_name(directory: Path, name: str, ext: str) -> str:
+    """Генерирует уникальное имя, добавляя суффикс _N при конфликте."""
+    base = Path(name).stem.lower().replace(" ", "_")
+    counter = 1
+    new_name = f"{base}{ext}"
+    while (directory / new_name).exists():
+        new_name = f"{base}_{counter}{ext}"
+        counter += 1
+    return new_name
+
+def is_file_old(file_path: Path, days: int) -> bool:
+    """Проверяет, старше ли файл заданного числа дней."""
+    return (time.time() - file_path.stat().st_mtime) > days * 86400'''
+
+LAB10_CSV_CODE = '''def parse_csv_order(file_path: Path):
+    """Читает CSV-файл заказа, возвращает (кол-во строк, итоговую сумму)."""
+    total = 0.0
+    rows  = 0
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    price = float(row.get("price", 0) or 0)
+                    qty   = int(row.get("quantity", 1) or 1)
+                    total += price * qty
+                    rows  += 1
+                except (ValueError, KeyError):
+                    pass
+    except Exception:
+        pass
+    return rows, total'''
+
+LAB10_SUMMARY_CODE = '''def generate_summary_report(processed_orders, target_dir, preview=False):
+    """Генерирует сводный текстовый отчёт по обработанным заказам."""
+    timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_path = target_dir / f"summary_{timestamp}.txt"
+    grand_total = sum(o["total"] for o in processed_orders)
+
+    lines = [
+        "=" * 60,
+        "СВОДНЫЙ ОТЧЁТ ОБРАБОТКИ ЗАКАЗОВ",
+        f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}",
+        "=" * 60,
+        f"Обработано файлов заказов: {len(processed_orders)}",
+        "ДЕТАЛИ:",
+    ]
+    for item in processed_orders:
+        lines.append(
+            f"  {item['name']:35s}  {item['rows']:3d} строк  "
+            f"{item['total']:10.2f} руб."
+        )
+    lines += ["", f"ИТОГОВАЯ СУММА: {grand_total:.2f} руб.", "=" * 60]
+
+    if not preview:
+        report_path.write_text("\\n".join(lines), encoding="utf-8")
+        log(f"Сводный отчёт сохранён: {report_path.name}")
+    else:
+        log(f"Будет создан сводный отчёт: {report_path.name}", preview=True)
+    return grand_total'''
+
+LAB10_PROCESS_CODE = '''def process_files(source_dir, target_dir, mode, preview):
+    stats = {"deleted": 0, "moved": 0, "errors": 0}
+    type_stats = {}
+    processed_orders = []
+
+    if not source_dir.exists():
+        log("Исходная папка не найдена — создаём тестовые данные...", "warning")
+        create_test_data(source_dir)
+
+    log(f"Режим: {mode.upper()} | Источник: {source_dir} | Цель: {target_dir}")
+
+    for file_path in sorted(source_dir.rglob("*")):
+        if not file_path.is_file(): continue
+        if target_dir in file_path.parents: continue
+
+        ext  = file_path.suffix.lower()
+        size = file_path.stat().st_size
+
+        # Удаление мусорных файлов
+        if ext in TRASH_EXTENSIONS:
+            log(f"Удаление временного файла ({ext}): {file_path.name}", preview=preview)
+            if not preview: file_path.unlink(); stats["deleted"] += 1
+            continue
+
+        # Удаление пустых файлов
+        if size == 0:
+            log(f"Удаление пустого файла: {file_path.name}", preview=preview)
+            if not preview: file_path.unlink(); stats["deleted"] += 1
+            continue
+
+        category = get_category(ext)
+
+        # Удаление устаревших архивов
+        if category == "Архивы" and is_file_old(file_path, ARCHIVE_LIFETIME_DAYS):
+            log(f"Удаление устаревшего архива: {file_path.name}", preview=preview)
+            if not preview: file_path.unlink(); stats["deleted"] += 1
+            continue
+
+        # Перемещение файла
+        category_path = target_dir / category
+        if not preview: category_path.mkdir(parents=True, exist_ok=True)
+        new_name = generate_unique_name(category_path, file_path.name, ext)
+        log(f"Перемещение [{category}]: {file_path.name} → {new_name}", preview=preview)
+
+        if ext == ".csv":
+            rows, total = parse_csv_order(file_path)
+            processed_orders.append({"name": new_name, "rows": rows, "total": total})
+            log(f"  CSV-заказ: {rows} строк, сумма {total:.2f} руб.", preview=preview)
+
+        if not preview:
+            try:
+                shutil.move(str(file_path), str(category_path / new_name))
+                stats["moved"] += 1
+                type_stats[category] = type_stats.get(category, 0) + 1
+            except (OSError, shutil.Error) as e:
+                log(f"Ошибка: {e}", "error"); stats["errors"] += 1
+        else:
+            type_stats[category] = type_stats.get(category, 0) + 1
+
+    if processed_orders:
+        orders_dir = target_dir / "Заказы"
+        if not preview: orders_dir.mkdir(parents=True, exist_ok=True)
+        grand_total = generate_summary_report(processed_orders, orders_dir, preview)
+        log(f"Итоговая сумма всех заказов: {grand_total:.2f} руб.")
+
+    return stats, type_stats'''
+
+LAB10_PREVIEW_OUTPUT = '''$ python main.py preview
+2026-05-28 14:23:01 | INFO     | Режим: PREVIEW | Источник: orders | Цель: processed_orders
+2026-05-28 14:23:01 | INFO     | [PREVIEW] Удаление временного файла (.tmp): temp.tmp
+2026-05-28 14:23:01 | INFO     | [PREVIEW] Удаление временного файла (.bak): backup.bak
+2026-05-28 14:23:01 | INFO     | [PREVIEW] Удаление пустого файла: empty.csv
+2026-05-28 14:23:01 | INFO     | [PREVIEW] Перемещение [Заказы]: order_001.csv  →  order_001.csv
+2026-05-28 14:23:01 | INFO     |   CSV-заказ: 2 строк, сумма 1520.00 руб.
+2026-05-28 14:23:01 | INFO     | [PREVIEW] Перемещение [Заказы]: order_002.csv  →  order_002.csv
+2026-05-28 14:23:01 | INFO     |   CSV-заказ: 2 строк, сумма 1850.00 руб.
+2026-05-28 14:23:01 | INFO     | [PREVIEW] Перемещение [Заказы]: order_003.csv  →  order_003.csv
+2026-05-28 14:23:01 | INFO     |   CSV-заказ: 3 строк, сумма 1600.00 руб.
+2026-05-28 14:23:01 | INFO     | [PREVIEW] Перемещение [Отчёты]: report_january.txt  →  report_january.txt
+2026-05-28 14:23:01 | INFO     | [PREVIEW] Перемещение [Отчёты]: report_february.txt  →  report_february.txt
+2026-05-28 14:23:01 | INFO     | [PREVIEW] Перемещение [Данные]: store_data.json  →  store_data.json
+2026-05-28 14:23:01 | INFO     | [PREVIEW] Будет создан сводный отчёт: summary_20260528_142301.txt
+2026-05-28 14:23:01 | INFO     | Итоговая сумма всех заказов: 4970.00 руб.'''
+
+LAB10_RUN_OUTPUT = '''$ python main.py run
+2026-05-28 14:25:10 | INFO     | Режим: RUN | Источник: orders | Цель: processed_orders
+2026-05-28 14:25:10 | INFO     | Удаление временного файла (.tmp): temp.tmp
+2026-05-28 14:25:10 | INFO     | Удаление временного файла (.bak): backup.bak
+2026-05-28 14:25:10 | INFO     | Удаление пустого файла: empty.csv
+2026-05-28 14:25:10 | INFO     | Перемещение [Заказы]: order_001.csv  →  order_001.csv
+2026-05-28 14:25:10 | INFO     |   CSV-заказ: 2 строк, сумма 1520.00 руб.
+2026-05-28 14:25:10 | INFO     | Перемещение [Заказы]: order_002.csv  →  order_002.csv
+2026-05-28 14:25:10 | INFO     |   CSV-заказ: 2 строк, сумма 1850.00 руб.
+2026-05-28 14:25:10 | INFO     | Перемещение [Заказы]: order_003.csv  →  order_003.csv
+2026-05-28 14:25:10 | INFO     |   CSV-заказ: 3 строк, сумма 1600.00 руб.
+2026-05-28 14:25:10 | INFO     | Перемещение [Отчёты]: report_january.txt  →  report_january.txt
+2026-05-28 14:25:10 | INFO     | Перемещение [Отчёты]: report_february.txt  →  report_february.txt
+2026-05-28 14:25:10 | INFO     | Перемещение [Данные]: store_data.json  →  store_data.json
+2026-05-28 14:25:10 | INFO     | Сводный отчёт сохранён: summary_20260528_142510.txt
+2026-05-28 14:25:10 | INFO     | Итоговая сумма всех заказов: 4970.00 руб.
+
+============================================================
+ИТОГОВАЯ СТАТИСТИКА ОБРАБОТКИ
+============================================================
+Режим работы  : RUN
+Источник      : orders
+Цель          : processed_orders
+Удалено файлов: 3
+Перемещено    : 6
+Ошибок        : 0
+
+ПО КАТЕГОРИЯМ:
+  Данные              : 1 файл(ов)
+  Заказы              : 3 файл(ов)
+  Отчёты              : 2 файл(ов)
+============================================================'''
+
+LAB10_UNIQUE_OUTPUT = '''$ python main.py run
+# При повторном запуске с теми же файлами:
+2026-05-28 14:30:00 | INFO     | Перемещение [Заказы]: order_001.csv  →  order_001_1.csv
+2026-05-28 14:30:00 | INFO     | Перемещение [Заказы]: order_002.csv  →  order_002_1.csv
+2026-05-28 14:30:00 | INFO     | Перемещение [Заказы]: order_003.csv  →  order_003_1.csv
+# Файлы не перезаписываются — к имени добавляется суффикс _1, _2, ...'''
+
+LAB10_FULL_CODE = '''import sys, csv, json, time, shutil, logging
+from pathlib import Path
+from datetime import datetime
+
+DEFAULT_SOURCE        = Path("orders")
+DEFAULT_TARGET        = Path("processed_orders")
+ARCHIVE_LIFETIME_DAYS = 30
+
+EXTENSIONS = {
+    "Заказы":  {".csv"},
+    "Отчёты":  {".txt", ".log"},
+    "Данные":  {".json"},
+    "Архивы":  {".zip", ".tar", ".gz", ".rar"},
+}
+TRASH_EXTENSIONS = {".tmp", ".bak", ".old"}
+
+
+def setup_logging():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)-8s | %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler("automation.log", encoding="utf-8"),
+        ],
+    )
+
+def log(message, level="info", preview=False):
+    prefix = "[PREVIEW] " if preview else ""
+    getattr(logging, level)(prefix + message)
+
+def get_category(ext):
+    for category, extensions in EXTENSIONS.items():
+        if ext in extensions:
+            return category
+    return "Другое"
+
+def generate_unique_name(directory, name, ext):
+    base = Path(name).stem.lower().replace(" ", "_")
+    counter = 1
+    new_name = f"{base}{ext}"
+    while (directory / new_name).exists():
+        new_name = f"{base}_{counter}{ext}"
+        counter += 1
+    return new_name
+
+def is_file_old(file_path, days):
+    return (time.time() - file_path.stat().st_mtime) > days * 86400
+
+def parse_csv_order(file_path):
+    total = 0.0; rows = 0
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    price = float(row.get("price", 0) or 0)
+                    qty   = int(row.get("quantity", 1) or 1)
+                    total += price * qty; rows += 1
+                except (ValueError, KeyError):
+                    pass
+    except Exception:
+        pass
+    return rows, total
+
+def generate_summary_report(processed_orders, target_dir, preview=False):
+    timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_path = target_dir / f"summary_{timestamp}.txt"
+    grand_total = sum(o["total"] for o in processed_orders)
+    lines = ["=" * 60, "СВОДНЫЙ ОТЧЁТ ОБРАБОТКИ ЗАКАЗОВ",
+             f"Дата: {datetime.now().strftime(\'%d.%m.%Y %H:%M:%S\')}",
+             "=" * 60, f"Обработано файлов заказов: {len(processed_orders)}", "ДЕТАЛИ:"]
+    for item in processed_orders:
+        lines.append(f"  {item[\'name\']:35s}  {item[\'rows\']:3d} строк  {item[\'total\']:10.2f} руб.")
+    lines += ["", f"ИТОГОВАЯ СУММА: {grand_total:.2f} руб.", "=" * 60]
+    if not preview:
+        report_path.write_text("\\n".join(lines), encoding="utf-8")
+        log(f"Сводный отчёт сохранён: {report_path.name}")
+    else:
+        log(f"Будет создан сводный отчёт: {report_path.name}", preview=True)
+    return grand_total
+
+def create_test_data(source_dir):
+    source_dir.mkdir(parents=True, exist_ok=True)
+    orders = [
+        ("order_001.csv", [(1,"Мастер и Маргарита",2,450),(2,"Война и мир",1,620)]),
+        ("order_002.csv", [(3,"Евгений Онегин",3,290),(4,"Анна Каренина",2,490)]),
+        ("order_003.csv", [(5,"Тихий Дон",1,510),(6,"Обломов",2,355),(7,"Преступление и наказание",1,380)]),
+    ]
+    for filename, rows in orders:
+        with open(source_dir / filename, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["book_id","title","quantity","price"])
+            for row in rows: writer.writerow(row)
+    (source_dir/"report_january.txt").write_text("Отчёт за январь 2026\\nПродано: 150 книг", encoding="utf-8")
+    (source_dir/"report_february.txt").write_text("Отчёт за февраль 2026\\nПродано: 178 книг", encoding="utf-8")
+    data = {"store":"Книжный магазин","updated":datetime.now().strftime("%Y-%m-%d"),
+            "top_books":["Мастер и Маргарита","Война и мир"]}
+    (source_dir/"store_data.json").write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
+    (source_dir/"temp.tmp").write_text("temporary"); (source_dir/"backup.bak").write_text("old backup")
+    (source_dir/"empty.csv").write_text("")
+    log(f"Тестовые данные созданы в папке: {source_dir}")
+
+def process_files(source_dir, target_dir, mode, preview):
+    stats = {"deleted": 0, "moved": 0, "errors": 0}
+    type_stats = {}; processed_orders = []
+    if not source_dir.exists():
+        log("Исходная папка не найдена — создаём тестовые данные...", "warning")
+        create_test_data(source_dir)
+    if not preview: target_dir.mkdir(parents=True, exist_ok=True)
+    log(f"Режим: {mode.upper()} | Источник: {source_dir} | Цель: {target_dir}")
+    for file_path in sorted(source_dir.rglob("*")):
+        if not file_path.is_file(): continue
+        if target_dir in file_path.parents: continue
+        ext = file_path.suffix.lower()
+        if ext in TRASH_EXTENSIONS:
+            log(f"Удаление временного файла ({ext}): {file_path.name}", preview=preview)
+            if not preview: file_path.unlink(); stats["deleted"] += 1
+            continue
+        try: size = file_path.stat().st_size
+        except FileNotFoundError: continue
+        if size == 0:
+            log(f"Удаление пустого файла: {file_path.name}", preview=preview)
+            if not preview: file_path.unlink(); stats["deleted"] += 1
+            continue
+        category = get_category(ext)
+        if category == "Архивы" and is_file_old(file_path, ARCHIVE_LIFETIME_DAYS):
+            log(f"Удаление устаревшего архива: {file_path.name}", preview=preview)
+            if not preview: file_path.unlink(); stats["deleted"] += 1
+            continue
+        category_path = target_dir / category
+        if not preview: category_path.mkdir(parents=True, exist_ok=True)
+        new_name = generate_unique_name(category_path, file_path.name, ext)
+        log(f"Перемещение [{category}]: {file_path.name} → {new_name}", preview=preview)
+        if ext == ".csv":
+            rows, total = parse_csv_order(file_path)
+            processed_orders.append({"name": new_name, "rows": rows, "total": total})
+            log(f"  CSV-заказ: {rows} строк, сумма {total:.2f} руб.", preview=preview)
+        if not preview:
+            try:
+                shutil.move(str(file_path), str(category_path / new_name))
+                stats["moved"] += 1; type_stats[category] = type_stats.get(category,0)+1
+            except (OSError, shutil.Error) as e:
+                log(f"Ошибка: {e}", "error"); stats["errors"] += 1
+        else:
+            type_stats[category] = type_stats.get(category, 0) + 1
+    if processed_orders:
+        orders_dir = target_dir / "Заказы"
+        if not preview: orders_dir.mkdir(parents=True, exist_ok=True)
+        grand_total = generate_summary_report(processed_orders, orders_dir, preview)
+        log(f"Итоговая сумма всех заказов: {grand_total:.2f} руб.")
+    return stats, type_stats
+
+def print_statistics(stats, type_stats, mode, source_dir, target_dir):
+    print("\\n" + "=" * 60)
+    print("ИТОГОВАЯ СТАТИСТИКА ОБРАБОТКИ"); print("=" * 60)
+    print(f"Режим работы  : {mode.upper()}")
+    print(f"Источник      : {source_dir}"); print(f"Цель          : {target_dir}")
+    print(f"Удалено файлов: {stats[\'deleted\']}"); print(f"Перемещено    : {stats[\'moved\']}")
+    print(f"Ошибок        : {stats[\'errors\']}")
+    if type_stats:
+        print("\\nПО КАТЕГОРИЯМ:")
+        for key in sorted(type_stats): print(f"  {key:<20s}: {type_stats[key]} файл(ов)")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    setup_logging()
+    args = sys.argv
+    mode = args[1].lower() if len(args) > 1 else "run"
+    if mode not in {"run", "preview"}:
+        print("Использование: python main.py [run|preview] [источник] [цель]")
+        sys.exit(1)
+    source_dir = Path(args[2]) if len(args) > 2 else DEFAULT_SOURCE
+    target_dir = Path(args[3]) if len(args) > 3 else DEFAULT_TARGET
+    preview    = (mode == "preview")
+    stats, type_stats = process_files(source_dir, target_dir, mode, preview)
+    print_statistics(stats, type_stats, mode, source_dir, target_dir)'''
+
+
+def generate_lab10(output_path):
+    doc = Document()
+    set_page_margins(doc)
+    create_title_page(doc, "10", "Автоматизация задач")
+    add_page_break(doc)
+
+    # Цель
+    _inline_bold_para(doc,
+        "Цель: ",
+        "освоить возможности стандартных библиотек Python для разработки "
+        "программных решений по автоматизации работы с файловой системой "
+        "путём создания скрипта обработки файлов книжного магазина, "
+        "реализующего классификацию, фильтрацию, анализ CSV-заказов "
+        "и формирование сводных отчётов."
+    )
+
+    # Постановка задачи
+    _inline_bold_para(doc, "Постановка задачи: ",
+        "для достижения цели необходимо выполнить следующие задачи:")
+    tasks = [
+        "изучить модуль pathlib для объектно-ориентированной работы с путями файловой системы;",
+        "изучить модуль shutil для высокоуровневых операций с файлами (копирование, перемещение);",
+        "изучить модуль logging для ведения журнала операций с настройкой форматирования и обработчиков;",
+        "изучить модуль sys для обработки аргументов командной строки;",
+        "изучить работу с форматами CSV и JSON средствами стандартной библиотеки Python;",
+        "разработать скрипт классификации файлов по расширениям на категории (Заказы, Отчёты, Данные, Архивы);",
+        "реализовать удаление мусорных (.tmp, .bak, .old), пустых файлов и устаревших архивов;",
+        "реализовать два режима работы: run (реальное выполнение) и preview (просмотр без изменений);",
+        "реализовать анализ CSV-заказов, генерацию сводного отчёта и вывод итоговой статистики.",
+    ]
+    for t in tasks:
+        p = doc.add_paragraph(style="List Bullet")
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+        run = p.add_run(t)
+        _apply_tnr_font(run, size=14)
+
+    # Введение
+    add_heading(doc, "Введение")
+    add_paragraph(doc,
+        "Автоматизация рутинных задач — одна из ключевых областей применения "
+        "скриптовых языков программирования. Организации ежедневно сталкиваются "
+        "с необходимостью упорядочивания файлов, резервного копирования данных, "
+        "обработки отчётов и мониторинга систем. Ручное выполнение таких операций "
+        "требует значительных временных затрат и подвержено ошибкам. "
+        "Python, благодаря богатой стандартной библиотеке, предоставляет все "
+        "необходимые инструменты для создания надёжных автоматизированных решений "
+        "без установки сторонних пакетов."
+    )
+    add_paragraph(doc,
+        "Стандартная библиотека Python включает специализированные модули для "
+        "решения задач автоматизации: pathlib предоставляет объектно-ориентированный "
+        "интерфейс к файловой системе, shutil — высокоуровневые операции с файлами, "
+        "logging — гибкую систему журналирования событий, csv и json — парсинг "
+        "структурированных форматов данных, sys — доступ к аргументам командной строки. "
+        "Совместное использование этих модулей позволяет строить полноценные "
+        "утилиты автоматизации без внешних зависимостей."
+    )
+    add_paragraph(doc,
+        "В рамках данной лабораторной работы в качестве предметной области "
+        "выбран книжный магазин — предметная область, используемая во всех "
+        "предыдущих работах. Разрабатывается скрипт автоматизированной обработки "
+        "файлов заказов: входная директория может содержать CSV-заказы, "
+        "текстовые отчёты, JSON-данные, архивы и мусорные файлы. "
+        "Скрипт классифицирует, фильтрует и перемещает файлы в структурированное "
+        "хранилище, анализирует содержимое заказов и формирует сводный отчёт."
+    )
+
+    # Теоретическая часть
+    add_heading(doc, "Теоретическая часть")
+
+    add_subheading(doc, "Основы автоматизации задач на Python")
+    add_paragraph(doc,
+        "Автоматизация с использованием Python охватывает несколько направлений: "
+        "работу с файловой системой (переименование, перемещение, архивация, поиск), "
+        "обработку структурированных данных (CSV, JSON, XML), "
+        "системное администрирование (резервное копирование, мониторинг), "
+        "и создание отчётов. Скрипты автоматизации запускаются из командной строки "
+        "с параметрами, что обеспечивает гибкость: один скрипт может обрабатывать "
+        "разные директории и работать в разных режимах."
+    )
+
+    add_subheading(doc, "Модуль pathlib")
+    add_paragraph(doc,
+        "Модуль pathlib (Python 3.4+) предоставляет объект Path — "
+        "кроссплатформенное представление пути файловой системы. "
+        "Объект Path поддерживает: проверку существования (exists()), "
+        "создание директорий (mkdir()), рекурсивный обход (rglob()), "
+        "получение метаданных (stat() — размер, время изменения), "
+        "работу с именем и расширением (.name, .stem, .suffix), "
+        "а также операторы / для конкатенации путей. "
+        "Метод rglob(\"*\") обходит все файлы и папки рекурсивно, "
+        "что делает его незаменимым при обработке сложных структур директорий:"
+    )
+    add_code_block(doc, LAB10_PATHLIB_CODE)
+    add_figure_caption(doc, "Рис. 1. Примеры работы с объектом Path (модуль pathlib)")
+
+    add_subheading(doc, "Модуль shutil")
+    add_paragraph(doc,
+        "Модуль shutil предназначен для высокоуровневых операций с файлами. "
+        "Функция shutil.move(src, dst) перемещает файл или директорию из src в dst; "
+        "если dst — это директория, файл помещается внутрь неё. "
+        "Функция shutil.copy2() копирует файл, сохраняя метаданные (время создания, "
+        "атрибуты). При ошибке перемещения (нет прав, файл заблокирован) "
+        "возбуждается исключение shutil.Error или OSError, которое необходимо "
+        "перехватывать для устойчивой работы скрипта."
+    )
+
+    add_subheading(doc, "Система журналирования (модуль logging)")
+    add_paragraph(doc,
+        "Модуль logging реализует гибкую многоуровневую систему журналирования. "
+        "Уровни серьёзности: DEBUG, INFO, WARNING, ERROR, CRITICAL. "
+        "Функция basicConfig() настраивает корневой регистратор: "
+        "уровень фильтрации, формат строки лога и список обработчиков (handlers). "
+        "StreamHandler выводит сообщения в консоль, "
+        "FileHandler — в файл с заданной кодировкой. "
+        "Параметр format поддерживает плейсхолдеры: "
+        "%(asctime)s — дата/время, %(levelname)s — уровень, %(message)s — текст. "
+        "Использование logging вместо print() позволяет легко переключать "
+        "вывод между консолью и файлом, добавлять временны́е метки и управлять "
+        "детальностью журнала:"
+    )
+    add_code_block(doc, LAB10_LOGGING_CODE)
+    add_figure_caption(doc, "Рис. 2. Настройка системы журналирования через logging")
+
+    add_subheading(doc, "Форматы данных CSV и JSON")
+    add_paragraph(doc,
+        "Модуль csv предоставляет классы reader и writer для чтения и записи "
+        "CSV-файлов (Comma-Separated Values). "
+        "Класс DictReader читает каждую строку как словарь, "
+        "где ключами служат заголовки из первой строки файла. "
+        "Это удобно при работе с файлами заказов: "
+        "row.get(\"price\", 0) безопасно возвращает значение поля price. "
+        "Модуль json обеспечивает сериализацию (json.dumps) и десериализацию "
+        "(json.loads / json.load) данных в формате JSON. "
+        "Параметр ensure_ascii=False позволяет записывать кириллицу без экранирования, "
+        "indent=2 форматирует JSON с отступами для читаемости."
+    )
+
+    # Реализация
+    add_heading(doc, "Реализация")
+    add_paragraph(doc,
+        "Скрипт реализован на чистом Python 3 без внешних зависимостей. "
+        "Код организован в функции по принципу единственной ответственности: "
+        "каждая функция решает одну конкретную подзадачу, "
+        "что упрощает тестирование и сопровождение."
+    )
+
+    add_subheading(doc, "Конфигурация и структура модулей")
+    add_paragraph(doc,
+        "В начале файла определяются все константы конфигурации: "
+        "пути по умолчанию, словарь EXTENSIONS с маппингом расширений на категории "
+        "и множество TRASH_EXTENSIONS для файлов-мусора. "
+        "Вынесение конфигурации в константы позволяет легко адаптировать "
+        "скрипт под другие предметные области без изменения основной логики:"
+    )
+    add_code_block(doc, LAB10_CONFIG_CODE)
+    add_figure_caption(doc, "Рис. 3. Конфигурация скрипта: импорты и константы")
+
+    add_subheading(doc, "Настройка логирования")
+    add_paragraph(doc,
+        "Функция setup_logging() настраивает два обработчика одновременно: "
+        "консольный (StreamHandler) для оперативного контроля и файловый "
+        "(FileHandler → automation.log) для ведения постоянного журнала. "
+        "Вспомогательная функция log() принимает параметр preview: "
+        "при preview=True к сообщению добавляется префикс [PREVIEW], "
+        "что визуально отличает «планируемые» операции от реально выполненных. "
+        "Вызов getattr(logging, level)(message) позволяет передавать уровень "
+        "логирования как строку:"
+    )
+    add_figure_caption(doc, "Рис. 4. Функции setup_logging() и log() — настройка журнала")
+
+    add_subheading(doc, "Классификация файлов по расширениям")
+    add_paragraph(doc,
+        "Функция get_category() выполняет поиск расширения файла в словаре EXTENSIONS. "
+        "Итерация по словарю с проверкой принадлежности расширения множеству "
+        "обеспечивает линейное время поиска O(k), где k — число категорий. "
+        "Для неизвестных расширений возвращается значение «Другое», "
+        "чтобы файлы не терялись при обработке:"
+    )
+    add_code_block(doc, LAB10_CATEGORY_CODE)
+    add_figure_caption(doc, "Рис. 5. Функция get_category() — определение категории по расширению")
+
+    add_subheading(doc, "Генерация уникальных имён и проверка возраста файлов")
+    add_paragraph(doc,
+        "Функция generate_unique_name() предотвращает перезапись файлов при конфликте "
+        "имён: если файл с таким именем уже существует в целевой директории, "
+        "к базовому имени добавляется числовой суффикс (_1, _2, ...) до тех пор, "
+        "пока не будет найдено свободное имя. Имя также нормализуется: "
+        "переводится в нижний регистр, пробелы заменяются на подчёркивания. "
+        "Функция is_file_old() сравнивает время последнего изменения файла "
+        "(st_mtime) с текущим временем (time.time()), используя перевод дней "
+        "в секунды (86400 = 24×60×60):"
+    )
+    add_code_block(doc, LAB10_UNIQUE_CODE)
+    add_figure_caption(doc, "Рис. 6. Функции generate_unique_name() и is_file_old()")
+
+    add_subheading(doc, "Анализ содержимого CSV-заказов")
+    add_paragraph(doc,
+        "Функция parse_csv_order() открывает CSV-файл заказа и суммирует "
+        "стоимость позиций: price × quantity для каждой строки. "
+        "Используется csv.DictReader, который автоматически сопоставляет "
+        "столбцы по заголовкам. Двойная обработка исключений (внешняя — "
+        "для ошибок открытия файла, внутренняя — для некорректных значений "
+        "отдельных строк) обеспечивает устойчивость к повреждённым данным:"
+    )
+    add_code_block(doc, LAB10_CSV_CODE)
+    add_figure_caption(doc, "Рис. 7. Функция parse_csv_order() — анализ содержимого заказа")
+
+    add_subheading(doc, "Генерация сводного отчёта")
+    add_paragraph(doc,
+        "После обработки всех CSV-файлов функция generate_summary_report() "
+        "формирует текстовый отчёт с детализацией по каждому заказу "
+        "и итоговой суммой. Имя файла включает временну́ю метку "
+        "(format \"%Y%m%d_%H%M%S\") для уникальности. "
+        "В режиме preview отчёт не создаётся физически — "
+        "его предполагаемое содержимое выводится в журнал:"
+    )
+    add_code_block(doc, LAB10_SUMMARY_CODE)
+    add_figure_caption(doc, "Рис. 8. Функция generate_summary_report() — формирование отчёта")
+
+    add_subheading(doc, "Основной цикл обработки файлов")
+    add_paragraph(doc,
+        "Функция process_files() реализует главный алгоритм обработки. "
+        "Если исходная директория отсутствует — автоматически создаются "
+        "тестовые данные (CSV-заказы, текстовые отчёты, JSON, мусорные файлы). "
+        "Для каждого файла последовательно применяются фильтры: "
+        "удаление мусора → удаление пустых → удаление устаревших архивов → "
+        "классификация и перемещение. "
+        "Параметр preview управляет всеми деструктивными операциями через "
+        "проверку if not preview:"
+    )
+    add_code_block(doc, LAB10_PROCESS_CODE)
+    add_figure_caption(doc, "Рис. 9. Функция process_files() — основной цикл обработки")
+
+    # Тестирование
+    add_heading(doc, "Тестирование")
+    add_paragraph(doc,
+        "Тестирование скрипта проводилось в два этапа: сначала в режиме preview "
+        "для проверки запланированных операций без изменения файловой системы, "
+        "затем в режиме run для реального выполнения. "
+        "Исходная директория orders содержала 9 файлов: "
+        "3 CSV-заказа, 2 текстовых отчёта, 1 JSON, 2 мусорных файла и 1 пустой CSV."
+    )
+
+    add_subheading(doc, "Режим preview — предварительный просмотр")
+    add_paragraph(doc,
+        "Запуск python main.py preview выводит журнал планируемых операций "
+        "с префиксом [PREVIEW]. Файловая система не изменяется: "
+        "файлы остаются на месте, директории не создаются. "
+        "Скрипт корректно отображает планируемые удаления мусорных файлов, "
+        "категории для каждого файла и содержимое CSV-заказов:"
+    )
+    add_code_block(doc, LAB10_PREVIEW_OUTPUT)
+    add_figure_caption(doc, "Рис. 10. Вывод скрипта в режиме preview")
+
+    add_subheading(doc, "Режим run — реальное выполнение")
+    add_paragraph(doc,
+        "Запуск python main.py run выполняет все операции физически: "
+        "удалены 3 файла (2 мусорных + 1 пустой CSV), "
+        "перемещены 6 файлов в соответствующие подкаталоги, "
+        "создан сводный отчёт summary_*.txt в папке processed_orders/Заказы/. "
+        "Итоговая статистика выводится в консоль после завершения обработки:"
+    )
+    add_code_block(doc, LAB10_RUN_OUTPUT)
+    add_figure_caption(doc, "Рис. 11. Вывод скрипта в режиме run с итоговой статистикой")
+
+    add_subheading(doc, "Структура целевой директории")
+    add_paragraph(doc,
+        "После выполнения в режиме run директория processed_orders "
+        "содержит следующую структуру категорий:"
+    )
+    dir_output = '''processed_orders/
+├── Данные/
+│   └── store_data.json
+├── Заказы/
+│   ├── order_001.csv
+│   ├── order_002.csv
+│   ├── order_003.csv
+│   └── summary_20260528_142510.txt
+└── Отчёты/
+    ├── report_january.txt
+    └── report_february.txt'''
+    add_code_block(doc, dir_output)
+    add_figure_caption(doc, "Рис. 12. Структура целевой директории после обработки")
+
+    add_subheading(doc, "Генерация уникальных имён при повторном запуске")
+    add_paragraph(doc,
+        "При повторном запуске скрипта с теми же исходными файлами "
+        "функция generate_unique_name() предотвращает перезапись "
+        "уже перемещённых файлов: к имени добавляется суффикс _1, _2 и т.д. "
+        "Файлы не теряются и не перезаписываются. "
+        "Также был протестирован некорректный режим запуска: "
+        "python main.py sort выводит справку об использовании "
+        "и завершается с кодом возврата 1."
+    )
+    add_code_block(doc, LAB10_UNIQUE_OUTPUT)
+    add_figure_caption(doc, "Рис. 13. Генерация уникальных имён при конфликте")
+
+    # Вывод
+    add_heading(doc, "Вывод")
+    add_paragraph(doc,
+        "В ходе выполнения лабораторной работы изучены и применены на практике "
+        "стандартные библиотеки Python для автоматизации задач: pathlib, shutil, "
+        "logging, sys, csv и json. Освоен объектно-ориентированный подход к "
+        "работе с файловой системой через объект Path; настроена многоканальная "
+        "система журналирования с одновременным выводом в консоль и файл; "
+        "реализована работа с форматами CSV и JSON для анализа структурированных данных."
+    )
+    add_paragraph(doc,
+        "Разработан скрипт автоматизации для обработки файлов книжного магазина. "
+        "Реализованы: классификация файлов по расширениям на 5 категорий, "
+        "удаление мусорных, пустых файлов и устаревших архивов, "
+        "перемещение в иерархическую структуру с генерацией уникальных имён, "
+        "анализ CSV-заказов с подсчётом суммы и строк, "
+        "формирование текстового сводного отчёта. "
+        "Реализация двух режимов (run/preview) повышает безопасность: "
+        "пользователь видит запланированные операции до их выполнения."
+    )
+    add_paragraph(doc,
+        "Полученные компетенции в области автоматизации файловых операций "
+        "применимы в широком круге практических задач: "
+        "организация резервного копирования, мониторинг и очистка рабочих директорий, "
+        "пакетная обработка отчётов, автоматическая сортировка загрузок. "
+        "Использование исключительно стандартной библиотеки обеспечивает "
+        "переносимость скрипта между платформами без необходимости установки "
+        "дополнительных пакетов."
+    )
+
+    # Приложение 1
+    add_heading(doc, "Приложение 1")
+    add_paragraph(doc,
+        "Полный исходный код скрипта автоматизации (lab10/main.py):"
+    )
+    add_code_block(doc, LAB10_FULL_CODE)
+
+    doc.save(output_path)
+    print(f"[OK] ЛР10: {output_path}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  ТОЧКА ВХОДА
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -3671,6 +4452,7 @@ if __name__ == "__main__":
     os.makedirs(f"{BASE}/lab7", exist_ok=True)
     os.makedirs(f"{BASE}/lab8", exist_ok=True)
     os.makedirs(f"{BASE}/lab9", exist_ok=True)
+    os.makedirs(f"{BASE}/lab10", exist_ok=True)
 
     generate_lab3(f"{BASE}/lab3/report.docx")
     generate_lab4(f"{BASE}/lab4/report.docx")
@@ -3679,5 +4461,6 @@ if __name__ == "__main__":
     generate_lab7(f"{BASE}/lab7/report.docx")
     generate_lab8(f"{BASE}/lab8/report.docx")
     generate_lab9(f"{BASE}/lab9/report.docx")
+    generate_lab10(f"{BASE}/lab10/report.docx")
 
-    print("\n[ГОТОВО] Все 7 отчётов сгенерированы.")
+    print("\n[ГОТОВО] Все 8 отчётов сгенерированы.")
