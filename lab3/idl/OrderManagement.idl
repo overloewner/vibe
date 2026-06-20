@@ -1,0 +1,15 @@
+module OrderManagement {
+    interface IOrderService {
+        void createOrder();
+        string getOrder(in string id);
+        void deleteOrder(in string id);
+    };
+    interface IPaymentService {
+        void processPayment();
+        void refund(in float amount);
+    };
+    class DatabaseService {
+        void save(in string data);
+        string find(in string query);
+    };
+};
